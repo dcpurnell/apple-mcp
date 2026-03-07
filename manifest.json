@@ -5,12 +5,15 @@
 	"version": "1.0.0",
 	"description": "Apple MCP tools for contacts, notes, messages, mail, reminders, calendar, and maps integration",
 	"long_description": "Apple MCP gives LLMs access to Apple's native apps including Contacts, Notes, Messages, Mail, Reminders, Calendar, and Maps. This integration allows LLMs to interact with these apps seamlessly, enabling comprehensive automation of daily tasks like managing contacts, creating notes, sending messages, handling emails, setting reminders, managing calendar events, and navigating with Maps.",
-	"author": {
-		"name": "Dhravya Shah",
-		"email": "dhravya@supermemory.com",
-		"url": "https://dhravya.dev"
+	"credits": {
+		"original_author": "Dhravya Shah",
+		"original_repository": "https://github.com/dhravya/apple-mcp"
 	},
-	"homepage": "https://supermemory.ai",
+	"author": {
+		"name": "dcpurnell",
+		"url": "https://github.com/dcpurnell"
+	},
+	"homepage": "https://github.com/dcpurnell/apple-mcp",
 	"keywords": [
 		"apple",
 		"automation",
@@ -69,6 +72,6 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/dhravya/apple-mcp.git"
+		"url": "git+https://github.com/dcpurnell/apple-mcp.git"
 	}
 }

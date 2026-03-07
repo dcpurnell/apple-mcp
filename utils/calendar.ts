@@ -1,4 +1,6 @@
 import { runAppleScript } from 'run-applescript';
+import { escapeAppleScript } from './applescript-escape';
+import { validateText, validateSearchQuery, VALIDATION_LIMITS } from './input-validation';
 
 // Define types for our calendar events
 interface CalendarEvent {
@@ -230,10 +232,11 @@ async function createEvent(
         }
 
         // Validate inputs
-        if (!title.trim()) {
+        const titleValidation = validateText(title, "Event title", VALIDATION_LIMITS.MAX_TEXT_SHORT);
+        if (!titleValidation.isValid) {
             return {
                 success: false,
-                message: "Event title cannot be empty"
+                message: titleValidation.error
             };
         }
 
@@ -261,9 +264,43 @@ async function createEvent(
             };
         }
 
+		if (location) {
+			const locationValidation = validateText(location, "Location", VALIDATION_LIMITS.MAX_TEXT_SHORT, false);
+			if (!locationValidation.isValid) {
+				return {
+					success: false,
+					message: locationValidation.error
+				};
+			}
+		}
+
+		if (notes) {
+			const notesValidation = validateText(notes, "Notes", VALIDATION_LIMITS.MAX_TEXT_MEDIUM, false);
+			if (!notesValidation.isValid) {
+				return {
+					success: false,
+					message: notesValidation.error
+				};
+			}
+		}
+
+		if (calendarName) {
+			const calendarValidation = validateText(calendarName, "Calendar name", VALIDATION_LIMITS.MAX_NAME_LENGTH, false);
+			if (!calendarValidation.isValid) {
+				return {
+					success: false,
+					message: calendarValidation.error
+				};
+			}
+		}
+
         console.error(`createEvent - Attempting to create event: "${title}"`);
 
         const targetCalendar = calendarName || "Calendar";
+        const escapedTitle = escapeAppleScript(title);
+        const escapedLocation = location ? escapeAppleScript(location) : "";
+        const escapedNotes = notes ? escapeAppleScript(notes) : "";
+        const escapedCalendarName = escapeAppleScript(targetCalendar);
         
         const script = `
 tell application "Calendar"
@@ -273,7 +310,7 @@ tell application "Calendar"
     -- Find target calendar
     set targetCal to null
     try
-        set targetCal to calendar "${targetCalendar}"
+        set targetCal to calendar "${escapedCalendarName}"
     on error
         -- Use first available calendar
         set targetCal to first calendar
@@ -281,14 +318,14 @@ tell application "Calendar"
     
     -- Create the event
     tell targetCal
-        set newEvent to make new event with properties {summary:"${title.replace(/"/g, '\\"')}", start date:startDate, end date:endDate, allday event:${isAllDay}}
+        set newEvent to make new event with properties {summary:"${escapedTitle}", start date:startDate, end date:endDate, allday event:${isAllDay}}
         
-        if "${location || ""}" ≠ "" then
-            set location of newEvent to "${(location || '').replace(/"/g, '\\"')}"
+        if "${escapedLocation}" ≠ "" then
+            set location of newEvent to "${escapedLocation}"
         end if
         
-        if "${notes || ""}" ≠ "" then
-            set description of newEvent to "${(notes || '').replace(/"/g, '\\"')}"
+        if "${escapedNotes}" ≠ "" then
+            set description of newEvent to "${escapedNotes}"
         end if
         
         return uid of newEvent

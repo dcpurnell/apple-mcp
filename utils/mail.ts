@@ -1,4 +1,6 @@
 import { runAppleScript } from "run-applescript";
+import { escapeAppleScript, getSecureTempFile } from "./applescript-escape";
+import { validateEmail, validateText, VALIDATION_LIMITS } from "./input-validation";
 
 // Configuration
 const CONFIG = {
@@ -168,18 +170,21 @@ async function searchMails(
 			throw new Error(accessResult.message);
 		}
 
-		if (!searchTerm || searchTerm.trim() === "") {
-			return [];
+		// Validate search term
+		const searchValidation = validateSearchQuery(searchTerm);
+		if (!searchValidation.isValid) {
+			throw new Error(searchValidation.error);
 		}
 
 		const maxEmails = Math.min(limit, CONFIG.MAX_EMAILS);
 		const cleanSearchTerm = searchTerm.toLowerCase();
+		const escapedSearchTerm = escapeAppleScript(cleanSearchTerm);
 
 		const script = `
 tell application "Mail"
     set emailList to {}
     set emailCount to 0
-    set searchTerm to "${cleanSearchTerm}"
+    set searchTerm to "${escapedSearchTerm}"
 
     -- Get mailboxes (limited to avoid performance issues)
     set allMailboxes to mailboxes
@@ -271,22 +276,46 @@ async function sendMail(
 		}
 
 		// Validate inputs
-		if (!to || !to.trim()) {
-			throw new Error("To address is required");
-		}
-		if (!subject || !subject.trim()) {
-			throw new Error("Subject is required");
-		}
-		if (!body || !body.trim()) {
-			throw new Error("Email body is required");
+		const toValidation = validateEmail(to);
+		if (!toValidation.isValid) {
+			throw new Error(`Invalid recipient email: ${toValidation.error}`);
 		}
 
-		// Use file-based approach for email body to avoid AppleScript escaping issues
-		const tmpFile = `/tmp/email-body-${Date.now()}.txt`;
+		if (cc) {
+			const ccValidation = validateEmail(cc);
+			if (!ccValidation.isValid) {
+				throw new Error(`Invalid CC email: ${ccValidation.error}`);
+			}
+		}
+
+		if (bcc) {
+			const bccValidation = validateEmail(bcc);
+			if (!bccValidation.isValid) {
+				throw new Error(`Invalid BCC email: ${bccValidation.error}`);
+			}
+		}
+
+		const subjectValidation = validateText(subject, "Subject", VALIDATION_LIMITS.MAX_TEXT_SHORT);
+		if (!subjectValidation.isValid) {
+			throw new Error(subjectValidation.error);
+		}
+
+		const bodyValidation = validateText(body, "Email body", VALIDATION_LIMITS.MAX_TEXT_LONG);
+		if (!bodyValidation.isValid) {
+			throw new Error(bodyValidation.error);
+		}
+
+		// Use secure file-based approach for email body
+		const tmpFile = getSecureTempFile("email-body", ".txt");
 		const fs = require("fs");
 
 		// Write content to temporary file
 		fs.writeFileSync(tmpFile, body.trim(), "utf8");
+
+		const escapedSubject = escapeAppleScript(subject);
+		const escapedTo = escapeAppleScript(to);
+		const escapedCc = cc ? escapeAppleScript(cc) : "";
+		const escapedBcc = bcc ? escapeAppleScript(bcc) : "";
 
 		const script = `
 tell application "Mail"
@@ -296,12 +325,12 @@ tell application "Mail"
     set emailBody to read file POSIX file "${tmpFile}" as «class utf8»
 
     -- Create new message
-    set newMessage to make new outgoing message with properties {subject:"${subject.replace(/"/g, '\\"')}", content:emailBody, visible:true}
+    set newMessage to make new outgoing message with properties {subject:"${escapedSubject}", content:emailBody, visible:true}
 
     tell newMessage
-        make new to recipient with properties {address:"${to.replace(/"/g, '\\"')}"}
-        ${cc ? `make new cc recipient with properties {address:"${cc.replace(/"/g, '\\"')}"}` : ""}
-        ${bcc ? `make new bcc recipient with properties {address:"${bcc.replace(/"/g, '\\"')}"}` : ""}
+        make new to recipient with properties {address:"${escapedTo}"}
+        ${cc ? `make new cc recipient with properties {address:"${escapedCc}"}` : ""}
+        ${bcc ? `make new bcc recipient with properties {address:"${escapedBcc}"}` : ""}
     end tell
 
     send newMessage

@@ -1,4 +1,6 @@
 import { runAppleScript } from "run-applescript";
+import { escapeAppleScript } from "./applescript-escape";
+import { validateUrl, validateSearchQuery } from "./input-validation";
 
 // Maximum number of top results to scrape
 const MAX_RESULTS = 3;
@@ -22,6 +24,15 @@ async function performSearch(
   detailedContent: { url: string; title: string; content: string }[];
 }> {
   try {
+    // Validate search query
+    const queryValidation = validateSearchQuery(query);
+    if (!queryValidation.isValid) {
+      return {
+        searchResults: [`Invalid search query: ${queryValidation.error}`],
+        detailedContent: [],
+      };
+    }
+
     await openSafariWithTimeout();
     await setUserAgent(USER_AGENT);
 
@@ -87,9 +98,10 @@ async function openSafariWithTimeout(): Promise<string | void> {
  * Sets the user agent in Safari
  */
 async function setUserAgent(userAgent: string): Promise<void> {
+  const escapedUserAgent = escapeAppleScript(userAgent);
   await runAppleScript(`
     tell application "Safari"
-      set the user agent of document 1 to "${userAgent.replace(/"/g, '\\"')}"
+      set the user agent of document 1 to "${escapedUserAgent}"
     end tell
   `);
 }
@@ -98,9 +110,18 @@ async function setUserAgent(userAgent: string): Promise<void> {
  * Navigates Safari to a URL
  */
 async function navigateToUrl(url: string): Promise<void> {
+  // Validate URL (but allow internal URLs for Google search)
+  if (!url.startsWith("https://www.google.com/search")) {
+    const urlValidation = validateUrl(url);
+    if (!urlValidation.isValid) {
+      throw new Error(`Invalid URL: ${urlValidation.error}`);
+    }
+  }
+
+  const escapedUrl = escapeAppleScript(url);
   await runAppleScript(`
     tell application "Safari"
-      set URL of document 1 to "${url.replace(/"/g, '\\"')}"
+      set URL of document 1 to "${escapedUrl}"
     end tell
   `);
 }

@@ -1,4 +1,6 @@
 import { runAppleScript } from "run-applescript";
+import { escapeAppleScript } from "./applescript-escape";
+import { validateText, validateSearchQuery, VALIDATION_LIMITS } from "./input-validation";
 
 // Configuration
 const CONFIG = {
@@ -237,13 +239,26 @@ async function createReminder(
 		}
 
 		// Validate inputs
-		if (!name || name.trim() === "") {
-			throw new Error("Reminder name cannot be empty");
+		const nameValidation = validateText(name, "Reminder name", VALIDATION_LIMITS.MAX_TEXT_SHORT);
+		if (!nameValidation.isValid) {
+			throw new Error(nameValidation.error);
 		}
 
-		const cleanName = name.replace(/\"/g, '\\"');
-		const cleanListName = listName.replace(/\"/g, '\\"');
-		const cleanNotes = notes ? notes.replace(/\"/g, '\\"') : "";
+		const listValidation = validateText(listName, "List name", VALIDATION_LIMITS.MAX_NAME_LENGTH, false);
+		if (!listValidation.isValid) {
+			throw new Error(listValidation.error);
+		}
+
+		if (notes) {
+			const notesValidation = validateText(notes, "Notes", VALIDATION_LIMITS.MAX_TEXT_MEDIUM, false);
+			if (!notesValidation.isValid) {
+				throw new Error(notesValidation.error);
+			}
+		}
+
+		const cleanName = escapeAppleScript(name);
+		const cleanListName = escapeAppleScript(listName);
+		const cleanNotes = notes ? escapeAppleScript(notes) : "";
 
 		const script = `
 tell application "Reminders"

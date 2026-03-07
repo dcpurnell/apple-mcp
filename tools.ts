@@ -138,8 +138,8 @@ const CONTACTS_TOOL: Tool = {
       properties: {
         operation: {
           type: "string",
-          description: "Operation to perform: 'list', 'search', 'open', 'create', or 'listById'",
-          enum: ["list", "search", "open", "create", "listById"]
+          description: "Operation to perform: 'list', 'search', 'open', 'create', 'listById', or 'getIncomplete'",
+          enum: ["list", "search", "open", "create", "listById", "getIncomplete"]
         },
         searchText: {
           type: "string",
@@ -151,7 +151,7 @@ const CONTACTS_TOOL: Tool = {
         },
         listName: {
           type: "string",
-          description: "Name of the list to create the reminder in (optional for create operation)"
+          description: "Name of the list to create the reminder in (optional for create operation) OR name of list to get incomplete reminders from (required for getIncomplete operation)"
         },
         listId: {
           type: "string",
@@ -171,6 +171,10 @@ const CONTACTS_TOOL: Tool = {
         dueDate: {
           type: "string",
           description: "Due date for the reminder in ISO format (optional for create operation)"
+        },
+        includeCompleted: {
+          type: "boolean",
+          description: "Whether to include completed items (optional for getIncomplete operation, default: false)"
         }
       },
       required: ["operation"]

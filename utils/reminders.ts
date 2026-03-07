@@ -4,14 +4,14 @@ import { validateText, validateSearchQuery, VALIDATION_LIMITS } from "./input-va
 
 // Configuration
 const CONFIG = {
-	// Maximum reminders to process (to avoid performance issues)
-	MAX_REMINDERS: 5, // Very aggressive limit for performance
-	// Maximum lists to process
-	MAX_LISTS: 2, // Very aggressive limit for performance
+	// Maximum reminders to return (reasonable limit for display)
+	MAX_REMINDERS: 100,
+	// Maximum lists to process when getting ALL lists
+	MAX_LISTS: 50,
 	// Timeout for operations (in milliseconds)
-	TIMEOUT_MS: 20000, // Increased timeout for slow operations
-	// Maximum reminders per list to scan
-	MAX_PER_LIST: 2, // Very aggressive limit for performance
+	TIMEOUT_MS: 15000,
+	// Maximum reminders per list to scan when getting ALL reminders
+	MAX_PER_LIST: 50,
 };
 
 /**
@@ -104,28 +104,121 @@ async function getAllLists(): Promise<ReminderList[]> {
 			throw new Error(accessResult.message);
 		}
 
+		// Get list names as a simple string list (more reliable)
+		const namesScript = `
+tell application "Reminders"
+    return name of every list
+end tell`;
+
+		const namesResult = await runAppleScriptWithTimeout(namesScript, 10000);
+		
+		// Parse the comma-separated string or array
+		let listNames: string[];
+		if (typeof namesResult === 'string') {
+			// AppleScript returns comma-separated string
+			listNames = namesResult.split(',').map(name => name.trim());
+		} else if (Array.isArray(namesResult)) {
+			listNames = namesResult;
+		} else {
+			listNames = [String(namesResult)];
+		}
+
+		// For each list name, get its ID
+		const lists: ReminderList[] = [];
+		for (const name of listNames) {
+			if (!name) continue;
+			
+			try {
+				const cleanName = escapeAppleScript(name);
+				const idScript = `
+tell application "Reminders"
+    set targetList to first list whose name is "${cleanName}"
+    return id of targetList
+end tell`;
+				
+				const listId = await runAppleScriptWithTimeout(idScript, 5000);
+				lists.push({
+					name: name,
+					id: String(listId) || "unknown-id"
+				});
+			} catch (error) {
+				// Skip lists we can't get ID for
+				console.log(`Warning: Could not get ID for list "${name}"`);
+			}
+			
+			// Limit number of lists processed
+			if (lists.length >= CONFIG.MAX_LISTS) break;
+		}
+
+		return lists;
+	} catch (error) {
+		console.error(
+			`Error getting reminder lists: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return [];
+	}
+}
+
+/**
+ * Get incomplete reminders from a specific list (optimized for weekly reviews)
+ * @param listName Name of the list to get reminders from
+ * @param includeCompleted Whether to include completed items (default: false)
+ * @returns Array of reminders
+ */
+async function getIncompleteReminders(listName: string, includeCompleted: boolean = false): Promise<Reminder[]> {
+	try {
+		const accessResult = await requestRemindersAccess();
+		if (!accessResult.hasAccess) {
+			throw new Error(accessResult.message);
+		}
+
+		const cleanListName = escapeAppleScript(listName);
+		const completedFilter = includeCompleted ? "" : " whose completed is false";
+
 		const script = `
 tell application "Reminders"
-    set listArray to {}
-    set listCount to 0
-    
     try
-        set allLists to lists
+        set targetList to first list whose name contains "${cleanListName}"
+        set targetReminders to reminders of targetList${completedFilter}
         
-        -- Process limited number of lists for performance
-        repeat with i from 1 to (count of allLists)
-            if listCount >= ${CONFIG.MAX_LISTS} then exit repeat
+        set reminderArray to {}
+        repeat with i from 1 to (count of targetReminders)
+            set currentReminder to item i of targetReminders
             
+            -- Get due date if exists
+            set reminderDueDate to missing value
             try
-                set currentList to item i of allLists
-                set listInfo to {|name|:(name of currentList), id:(id of currentList)}
-                set listArray to listArray & {listInfo}
-                set listCount to listCount + 1
+                set reminderDueDate to due date of currentReminder
             end try
+            
+            -- Get priority
+            set priorityValue to 0
+            try
+                set priorityValue to priority of currentReminder
+            end try
+            
+            set reminderInfo to {¬
+                |name|:(name of currentReminder), ¬
+                id:(id of currentReminder), ¬
+                body:(body of currentReminder), ¬
+                completed:(completed of currentReminder), ¬
+                listName:(name of targetList), ¬
+                priority:priorityValue¬
+            }
+            
+            if reminderDueDate is not missing value then
+                set reminderInfo to reminderInfo & {dueDate:(reminderDueDate as string)}
+            else
+                set reminderInfo to reminderInfo & {dueDate:missing value}
+            end if
+            
+            set reminderArray to reminderArray & {reminderInfo}
         end repeat
+        
+        return reminderArray
+    on error errMsg
+        return {}
     end try
-    
-    return listArray
 end tell`;
 
 		const result = await runAppleScriptWithTimeout(script, CONFIG.TIMEOUT_MS);
@@ -133,13 +226,18 @@ end tell`;
 		// Convert AppleScript result to our format
 		const resultArray = Array.isArray(result) ? result : result ? [result] : [];
 
-		return resultArray.map((listData: any) => ({
-			name: listData.name || "Untitled List",
-			id: listData.id || "unknown-id",
+		return resultArray.map((reminderData: any) => ({
+			name: reminderData.name || "Untitled",
+			id: reminderData.id || "unknown-id",
+			body: reminderData.body || "",
+			completed: reminderData.completed || false,
+			dueDate: reminderData.dueDate && reminderData.dueDate !== "missing value" ? reminderData.dueDate : null,
+			listName: reminderData.listName || listName,
+			priority: reminderData.priority || 0,
 		}));
 	} catch (error) {
 		console.error(
-			`Error getting reminder lists: ${error instanceof Error ? error.message : String(error)}`,
+			`Error getting incomplete reminders: ${error instanceof Error ? error.message : String(error)}`,
 		);
 		return [];
 	}
@@ -547,6 +645,7 @@ end tell`;
 export default {
 	getAllLists,
 	getAllReminders,
+	getIncompleteReminders,
 	searchReminders,
 	createReminder,
 	openReminder,

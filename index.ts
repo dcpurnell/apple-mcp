@@ -928,6 +928,36 @@ end tell`;
 								reminders: results,
 								isError: false,
 							};
+						} else if (operation === "getIncomplete") {
+							// Get incomplete reminders from a specific list (optimized for weekly reviews)
+							const { listName, includeCompleted } = args;
+							if (!listName) {
+								throw new Error("listName is required for getIncomplete operation");
+							}
+							const results = await remindersModule.getIncompleteReminders(
+								listName,
+								includeCompleted || false,
+							);
+							
+							const completedCount = results.filter(r => r.completed).length;
+							const incompleteCount = results.length - completedCount;
+							
+							return {
+								content: [
+									{
+										type: "text",
+										text:
+											results.length > 0
+												? `Found ${incompleteCount} incomplete reminder(s) in list "${listName}".${includeCompleted ? ` (${completedCount} completed)` : ''}`
+												: `No ${includeCompleted ? '' : 'incomplete '}reminders found in list "${listName}".`,
+									},
+								],
+								reminders: results,
+								listName: listName,
+								incompleteCount: incompleteCount,
+								completedCount: completedCount,
+								isError: false,
+							};
 						}
 
 						return {

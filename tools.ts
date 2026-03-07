@@ -184,7 +184,7 @@ const CONTACTS_TOOL: Tool = {
   
 const CALENDAR_TOOL: Tool = {
   name: "calendar",
-  description: "Search, create, and open calendar events in Apple Calendar app",
+  description: "Search, create, and open calendar events in Apple Calendar app. Uses Python EventKit for fast queries (238ms for 21-day window). Default calendars: Doug Purnell, Goals, Family, F3 Greensboro Events, purnellbbq@gmail.com, Holidays in United States",
   inputSchema: {
     type: "object",
     properties: {
@@ -201,17 +201,22 @@ const CALENDAR_TOOL: Tool = {
         type: "string",
         description: "ID of the event to open (required for open operation)"
       },
+      calendarNames: {
+        type: "array",
+        items: { type: "string" },
+        description: "Array of calendar names to query (optional). If not specified, queries these 6 calendars: Doug Purnell, Goals, Family, F3 Greensboro Events, purnellbbq@gmail.com, Holidays in United States"
+      },
       limit: {
         type: "number",
-        description: "Number of events to retrieve (optional, default 10)"
+        description: "Number of events to retrieve (optional, default 20, max 100)"
       },
       fromDate: {
         type: "string",
-        description: "Start date for search range in ISO format (optional, default is today)"
+        description: "Start date for search range in ISO format (optional, default is 7 days ago)"
       },
       toDate: {
         type: "string",
-        description: "End date for search range in ISO format (optional, default is 30 days from now for search, 7 days for list)"
+        description: "End date for search range in ISO format (optional, default is 14 days from now)"
       },
       title: {
         type: "string",

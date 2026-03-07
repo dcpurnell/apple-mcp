@@ -23,7 +23,7 @@ let message: typeof import("./utils/message").default | null = null;
 let mail: typeof import("./utils/mail").default | null = null;
 let reminders: typeof import("./utils/reminders").default | null = null;
 
-let calendar: typeof import("./utils/calendar").default | null = null;
+let calendar: typeof import("./utils/calendar-python") | null = null;
 let maps: typeof import("./utils/maps").default | null = null;
 
 // Type map for module names to their types
@@ -33,7 +33,7 @@ type ModuleMap = {
 	message: typeof import("./utils/message").default;
 	mail: typeof import("./utils/mail").default;
 	reminders: typeof import("./utils/reminders").default;
-	calendar: typeof import("./utils/calendar").default;
+	calendar: typeof import("./utils/calendar-python");
 	maps: typeof import("./utils/maps").default;
 };
 
@@ -70,7 +70,7 @@ async function loadModule<
 				if (!reminders) reminders = (await import("./utils/reminders")).default;
 				return reminders as ModuleMap[T];
 			case "calendar":
-				if (!calendar) calendar = (await import("./utils/calendar")).default;
+				if (!calendar) calendar = await import("./utils/calendar-python");
 				return calendar as ModuleMap[T];
 			case "maps":
 				if (!maps) maps = (await import("./utils/maps")).default;
@@ -994,14 +994,49 @@ end tell`;
 						const calendarModule = await loadModule("calendar");
 						const { operation } = args;
 
+						// Default target calendars (user's 6 primary calendars)
+						const DEFAULT_CALENDARS = [
+							"Doug Purnell",
+							"Goals",
+							"Family",
+							"F3 Greensboro Events",
+							"purnellbbq@gmail.com",
+							"Holidays in United States"
+						];
+
+						// Helper to convert ISO date range to daysBack/daysForward
+						const convertDateRange = (fromDate?: string, toDate?: string) => {
+							const now = new Date();
+							let daysBack = 7;
+							let daysForward = 14;
+
+							if (fromDate) {
+								const from = new Date(fromDate);
+								const diffMs = now.getTime() - from.getTime();
+								daysBack = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+							}
+
+							if (toDate) {
+								const to = new Date(toDate);
+								const diffMs = to.getTime() - now.getTime();
+								daysForward = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+							}
+
+							return { daysBack, daysForward };
+						};
+
 						switch (operation) {
 							case "search": {
-								const { searchText, limit, fromDate, toDate } = args;
+								const { searchText, calendarNames, limit, fromDate, toDate } = args;
+								const { daysBack, daysForward } = convertDateRange(fromDate, toDate);
+								const calendars = (calendarNames && calendarNames.length > 0) ? calendarNames : DEFAULT_CALENDARS;
+								
 								const events = await calendarModule.searchEvents(
 									searchText!,
-									limit,
-									fromDate,
-									toDate,
+									calendars,
+									daysBack,
+									daysForward,
+									limit || 20
 								);
 
 								return {
@@ -1010,17 +1045,17 @@ end tell`;
 											type: "text",
 											text:
 												events.length > 0
-													? `Found ${events.length} events matching "${searchText}":\n\n${events
+													? `Found ${events.length} events matching "${searchText}" (searched ${calendars.length} calendars):\n\n${events
 															.map(
 																(event) =>
-																	`${event.title} (${new Date(event.startDate!).toLocaleString()} - ${new Date(event.endDate!).toLocaleString()})\n` +
+																	`${event.title} (${new Date(event.startDate).toLocaleString()} - ${new Date(event.endDate).toLocaleString()})\n` +
 																	`Location: ${event.location || "Not specified"}\n` +
 																	`Calendar: ${event.calendarName}\n` +
 																	`ID: ${event.id}\n` +
 																	`${event.notes ? `Notes: ${event.notes}\n` : ""}`,
 															)
 															.join("\n\n")}`
-													: `No events found matching "${searchText}".`,
+													: `No events found matching "${searchText}" in ${calendars.length} calendars.`,
 										},
 									],
 									isError: false,
@@ -1045,19 +1080,23 @@ end tell`;
 							}
 
 							case "list": {
-								const { limit, fromDate, toDate } = args;
+								const { calendarNames, limit, fromDate, toDate } = args;
+								const { daysBack, daysForward } = convertDateRange(fromDate, toDate);
+								const calendars = (calendarNames && calendarNames.length > 0) ? calendarNames : DEFAULT_CALENDARS;
+								
 								const events = await calendarModule.getEvents(
-									limit,
-									fromDate,
-									toDate,
+									calendars,
+									daysBack,
+									daysForward,
+									limit || 20
 								);
 
 								const startDateText = fromDate
 									? new Date(fromDate).toLocaleDateString()
-									: "today";
+									: `${daysBack} days ago`;
 								const endDateText = toDate
 									? new Date(toDate).toLocaleDateString()
-									: "next 7 days";
+									: `${daysForward} days from now`;
 
 								return {
 									content: [
@@ -1065,16 +1104,16 @@ end tell`;
 											type: "text",
 											text:
 												events.length > 0
-													? `Found ${events.length} events from ${startDateText} to ${endDateText}:\n\n${events
+													? `Found ${events.length} events from ${startDateText} to ${endDateText} (${calendars.length} calendars):\n\n${events
 															.map(
 																(event) =>
-																	`${event.title} (${new Date(event.startDate!).toLocaleString()} - ${new Date(event.endDate!).toLocaleString()})\n` +
+																	`${event.title} (${new Date(event.startDate).toLocaleString()} - ${new Date(event.endDate).toLocaleString()})\n` +
 																	`Location: ${event.location || "Not specified"}\n` +
 																	`Calendar: ${event.calendarName}\n` +
 																	`ID: ${event.id}`,
 															)
 															.join("\n\n")}`
-													: `No events found from ${startDateText} to ${endDateText}.`,
+													: `No events found from ${startDateText} to ${endDateText} in ${calendars.length} calendars.`,
 										},
 									],
 									isError: false,
@@ -1088,24 +1127,24 @@ end tell`;
 									endDate,
 									location,
 									notes,
-									isAllDay,
 									calendarName,
 								} = args;
+								
 								const result = await calendarModule.createEvent(
+									calendarName || "Calendar",
 									title!,
-									startDate!,
-									endDate!,
+									new Date(startDate!),
+									new Date(endDate!),
 									location,
-									notes,
-									isAllDay,
-									calendarName,
+									notes
 								);
+								
 								return {
 									content: [
 										{
 											type: "text",
 											text: result.success
-												? `${result.message} Event scheduled from ${new Date(startDate!).toLocaleString()} to ${new Date(endDate!).toLocaleString()}${result.eventId ? `\nEvent ID: ${result.eventId}` : ""}`
+												? `${result.message} Event scheduled from ${new Date(startDate!).toLocaleString()} to ${new Date(endDate!).toLocaleString()}`
 												: `Error creating event: ${result.message}`,
 										},
 									],
@@ -1583,6 +1622,7 @@ function isCalendarArgs(args: unknown): args is {
 	operation: "search" | "open" | "list" | "create";
 	searchText?: string;
 	eventId?: string;
+	calendarNames?: string[];
 	limit?: number;
 	fromDate?: string;
 	toDate?: string;

@@ -1,4 +1,5 @@
 import { runAppleScript } from 'run-applescript';
+import { run } from '@jxa/run';
 import { escapeAppleScript } from './applescript-escape';
 import { validateText, validateSearchQuery, VALIDATION_LIMITS } from './input-validation';
 
@@ -96,46 +97,77 @@ async function getEvents(
         const startDate = fromDate ? fromDate : today.toISOString().split('T')[0];
         const endDate = toDate ? toDate : defaultEndDate.toISOString().split('T')[0];
         
-        const script = `
-tell application "Calendar"
-    set eventList to {}
-    set eventCount to 0
-    
-    -- Create a simple test event to return (since Calendar queries are too slow)
-    try
-        set testEvent to {}
-        set testEvent to testEvent & {id:"dummy-event-1"}
-        set testEvent to testEvent & {title:"No events available - Calendar operations too slow"}
-        set testEvent to testEvent & {calendarName:"System"}
-        set testEvent to testEvent & {startDate:"${startDate}"}
-        set testEvent to testEvent & {endDate:"${endDate}"}
-        set testEvent to testEvent & {isAllDay:false}
-        set testEvent to testEvent & {location:""}
-        set testEvent to testEvent & {notes:"Calendar.app AppleScript queries are notoriously slow and unreliable"}
-        set testEvent to testEvent & {url:""}
+        // Use JXA for faster calendar access
+        const result = await run((args: { startDate: string, endDate: string, limit: number }) => {
+            const Calendar = Application('Calendar');
+            Calendar.includeStandardAdditions = true;
+            
+            const eventList: any[] = [];
+            let eventCount = 0;
+            
+            try {
+                const calendars = Calendar.calendars();
+                const startDateObj = new Date(args.startDate + ' 00:00:00');
+                const endDateObj = new Date(args.endDate + ' 23:59:59');
+                
+                for (let i = 0; i < calendars.length && eventCount < args.limit; i++) {
+                    try {
+                        const cal = calendars[i];
+                        const calName = cal.name();
+                        const events = cal.events();
+                        
+                        for (let j = 0; j < events.length && eventCount < args.limit; j++) {
+                            try {
+                                const evt = events[j];
+                                const evtStart = evt.startDate();
+                                
+                                // Check if event is in date range
+                                if (evtStart >= startDateObj && evtStart <= endDateObj) {
+                                    const eventInfo: any = {
+                                        id: evt.uid(),
+                                        title: evt.summary() || 'Untitled Event',
+                                        calendarName: calName,
+                                        startDate: evtStart.toISOString(),
+                                        endDate: evt.endDate().toISOString(),
+                                        isAllDay: evt.alldayEvent() || false
+                                    };
+                                    
+                                    try { eventInfo.location = evt.location() || ''; } catch (e) { eventInfo.location = ''; }
+                                    try { eventInfo.notes = evt.description() || ''; } catch (e) { eventInfo.notes = ''; }
+                                    try { eventInfo.url = evt.url() || ''; } catch (e) { eventInfo.url = ''; }
+                                    
+                                    eventList.push(eventInfo);
+                                    eventCount++;
+                                }
+                            } catch (evtErr) {
+                                // Skip problematic events
+                            }
+                        }
+                    } catch (calErr) {
+                        // Skip problematic calendars
+                    }
+                }
+            } catch (err) {
+                throw new Error(`Calendar access failed: ${err}`);
+            }
+            
+            return eventList;
+        }, { startDate, endDate, limit }) as any[];
         
-        set eventList to eventList & {testEvent}
-    end try
-    
-    return eventList
-end tell`;
-
-        const result = await runAppleScript(script) as any;
-        
-        // Convert AppleScript result to our format - handle both array and non-array results
-        const resultArray = Array.isArray(result) ? result : [];
-        const events: CalendarEvent[] = resultArray.map((eventData: any) => ({
+        // Convert to CalendarEvent format
+        const events: CalendarEvent[] = result.map((eventData: any) => ({
             id: eventData.id || `unknown-${Date.now()}`,
             title: eventData.title || "Untitled Event",
             location: eventData.location || null,
             notes: eventData.notes || null,
-            startDate: eventData.startDate ? new Date(eventData.startDate).toISOString() : null,
-            endDate: eventData.endDate ? new Date(eventData.endDate).toISOString() : null,
+            startDate: eventData.startDate || null,
+            endDate: eventData.endDate || null,
             calendarName: eventData.calendarName || "Unknown Calendar",
             isAllDay: eventData.isAllDay || false,
             url: eventData.url || null
         }));
         
+        console.error(`getEvents - Found ${events.length} events`);
         return events;
     } catch (error) {
         console.error(`Error getting events: ${error instanceof Error ? error.message : String(error)}`);
@@ -172,30 +204,81 @@ async function searchEvents(
         const startDate = fromDate ? fromDate : today.toISOString().split('T')[0];
         const endDate = toDate ? toDate : defaultEndDate.toISOString().split('T')[0];
         
-        const script = `
-tell application "Calendar"
-    set eventList to {}
-    
-    -- Return empty list for search (Calendar queries are too slow)
-    return eventList
-end tell`;
-
-        const result = await runAppleScript(script) as any;
+        const searchLower = searchText.toLowerCase();
         
-        // Convert AppleScript result to our format - handle both array and non-array results
-        const resultArray = Array.isArray(result) ? result : [];
-        const events: CalendarEvent[] = resultArray.map((eventData: any) => ({
+        // Use JXA for faster calendar search
+        const result = await run((args: { startDate: string, endDate: string, limit: number, searchText: string }) => {
+            const Calendar = Application('Calendar');
+            Calendar.includeStandardAdditions = true;
+            
+            const eventList: any[] = [];
+            let eventCount = 0;
+            
+            try {
+                const calendars = Calendar.calendars();
+                const startDateObj = new Date(args.startDate + ' 00:00:00');
+                const endDateObj = new Date(args.endDate + ' 23:59:59');
+                const searchLower = args.searchText.toLowerCase();
+                
+                for (let i = 0; i < calendars.length && eventCount < args.limit; i++) {
+                    try {
+                        const cal = calendars[i];
+                        const calName = cal.name();
+                        const events = cal.events();
+                        
+                        for (let j = 0; j < events.length && eventCount < args.limit; j++) {
+                            try {
+                                const evt = events[j];
+                                const evtStart = evt.startDate();
+                                const evtTitle = (evt.summary() || '').toLowerCase();
+                                
+                                // Check if event is in date range and matches search
+                                if (evtStart >= startDateObj && evtStart <= endDateObj && evtTitle.includes(searchLower)) {
+                                    const eventInfo: any = {
+                                        id: evt.uid(),
+                                        title: evt.summary() || 'Untitled Event',
+                                        calendarName: calName,
+                                        startDate: evtStart.toISOString(),
+                                        endDate: evt.endDate().toISOString(),
+                                        isAllDay: evt.alldayEvent() || false
+                                    };
+                                    
+                                    try { eventInfo.location = evt.location() || ''; } catch (e) { eventInfo.location = ''; }
+                                    try { eventInfo.notes = evt.description() || ''; } catch (e) { eventInfo.notes = ''; }
+                                    try { eventInfo.url = evt.url() || ''; } catch (e) { eventInfo.url = ''; }
+                                    
+                                    eventList.push(eventInfo);
+                                    eventCount++;
+                                }
+                            } catch (evtErr) {
+                                // Skip problematic events
+                            }
+                        }
+                    } catch (calErr) {
+                        // Skip problematic calendars
+                    }
+                }
+            } catch (err) {
+                throw new Error(`Calendar search failed: ${err}`);
+            }
+            
+            return eventList;
+        }, { startDate, endDate, limit, searchText: searchLower }) as any[];
+        
+        // Convert to CalendarEvent format
+        const events: CalendarEvent[] = result.map((eventData: any) => ({
             id: eventData.id || `unknown-${Date.now()}`,
             title: eventData.title || "Untitled Event",
             location: eventData.location || null,
             notes: eventData.notes || null,
-            startDate: eventData.startDate ? new Date(eventData.startDate).toISOString() : null,
-            endDate: eventData.endDate ? new Date(eventData.endDate).toISOString() : null,
+            startDate: eventData.startDate || null,
+            endDate: eventData.endDate || null,
             calendarName: eventData.calendarName || "Unknown Calendar",
             isAllDay: eventData.isAllDay || false,
             url: eventData.url || null
         }));
         
+        console.error(`searchEvents - Found ${events.length} matching events`);
         return events;
     } catch (error) {
         console.error(`Error searching events: ${error instanceof Error ? error.message : String(error)}`);

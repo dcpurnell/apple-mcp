@@ -2,8 +2,7 @@
 
 > **Plot twist:** Your Mac can do more than just look pretty. Turn your Apple apps into AI superpowers!
 
-Love this MCP? Check out supermemory MCP too - https://mcp.supermemory.ai
-
+Love this MCP? Check out supermemory MCP too - <https://mcp.supermemory.ai>
 
 Click below for one click install with `.dxt`
 
@@ -12,7 +11,6 @@ Click below for one click install with `.dxt`
 </a>
 
 [![smithery badge](https://smithery.ai/badge/@Dhravya/apple-mcp)](https://smithery.ai/server/@Dhravya/apple-mcp)
-
 
 <a href="https://glama.ai/mcp/servers/gq2qg6kxtu">
   <img width="380" height="200" src="https://glama.ai/mcp/servers/gq2qg6kxtu/badge" alt="Apple Server MCP server" />
@@ -128,6 +126,7 @@ pip3 install pyobjc-framework-EventKit pyobjc-framework-Contacts
 ```
 
 This enables:
+
 - ⚡ **Calendar**: Lightning-fast operations (~238ms vs 30+ seconds with AppleScript)
 - ⚡ **Contacts**: Fast contact searches with full details (~1 second per query)
 
@@ -137,7 +136,7 @@ Without these frameworks, calendar and contact features will still work but may 
 
 ## 🎬 See It In Action
 
-Here's a step-by-step video walkthrough: https://x.com/DhravyaShah/status/1892694077679763671
+Here's a step-by-step video walkthrough: <https://x.com/DhravyaShah/status/1892694077679763671>
 
 (Yes, it's actually as cool as it sounds)
 

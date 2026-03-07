@@ -146,10 +146,12 @@ The test suite covers:
 **Calendar & Contacts Tests Need Updates (March 2026)**
 
 The Calendar and Contacts modules were upgraded from AppleScript to Python native frameworks for massive performance improvements:
+
 - **Calendar**: Now uses Python EventKit (~238ms vs 30+ seconds) - 126x faster ⚡
 - **Contacts**: Now uses Python Contacts framework (~1 second with full details)
 
 **Impact on Tests:**
+
 - `calendar.test.ts` - Needs API updates (old AppleScript API removed)
 - `contacts.test.ts` - Needs API updates (old `getAllNumbers()` → new `getAllContacts()` with full Contact objects)
 - `contacts-simple.test.ts` - Needs API updates
@@ -157,6 +159,7 @@ The Calendar and Contacts modules were upgraded from AppleScript to Python nativ
 **MCP Server Status:** ✅ Fully functional! Only the test suite needs updates.
 
 **Old API → New API:**
+
 ```typescript
 // Old (removed)
 calendar.getEvents(limit)

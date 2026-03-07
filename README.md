@@ -1,22 +1,21 @@
-# 🍎 Apple MCP - Better Siri that can do it all :)
+# 🍎 Apple MCP - Performance Edition ⚡
 
-> **Plot twist:** Your Mac can do more than just look pretty. Turn your Apple apps into AI superpowers!
+> **Automation powerhouse for macOS** - Control your Apple apps with AI, 126x faster than before!
 
-Love this MCP? Check out supermemory MCP too - <https://mcp.supermemory.ai>
+**This is an enhanced fork** of the original [apple-mcp by supermemory](https://github.com/supermemoryai/apple-mcp) with major performance improvements:
 
-Click below for one click install with `.dxt`
+- 🚀 **126x faster Calendar** - Python EventKit (~238ms vs 30+ seconds)
+- ⚡ **Fast Contacts** - Python Contacts framework (~1 second with full details)
+- 📊 **Optimized Reminders** - Query incomplete items only
+- 🔧 **Native macOS frameworks** - Better reliability and speed
 
-<a href="https://github.com/supermemoryai/apple-mcp/releases/download/1.0.0/apple-mcp.dxt">
-  <img  width="280" alt="Install with Claude DXT" src="https://github.com/user-attachments/assets/9b0fa2a0-a954-41ee-ac9e-da6e63fc0881" />
-</a>
+**Original project:** Check out [supermemory MCP](https://mcp.supermemory.ai) and the [original apple-mcp](https://github.com/supermemoryai/apple-mcp)
 
-[![smithery badge](https://smithery.ai/badge/@Dhravya/apple-mcp)](https://smithery.ai/server/@Dhravya/apple-mcp)
+**This fork:** <https://github.com/dcpurnell/apple-mcp>
 
-<a href="https://glama.ai/mcp/servers/gq2qg6kxtu">
-  <img width="380" height="200" src="https://glama.ai/mcp/servers/gq2qg6kxtu/badge" alt="Apple Server MCP server" />
-</a>
 
-## 🤯 What Can This Thing Do?
+
+## What Can This Thing Do?
 
 **Basically everything you wish your Mac could do automatically (but never bothered to set up):**
 
@@ -165,9 +164,13 @@ Here's a step-by-step video walkthrough: <https://x.com/DhravyaShah/status/18926
 ## 🛠️ Local Development (For the Tinkerers)
 
 ```bash
-git clone https://github.com/dhravya/apple-mcp.git
+git clone https://github.com/dcpurnell/apple-mcp.git
 cd apple-mcp
 bun install
+
+# Install Python dependencies for fast Calendar & Contacts
+pip3 install pyobjc-framework-EventKit pyobjc-framework-Contacts
+
 bun run index.ts
 ```
 
@@ -175,4 +178,14 @@ Now go forth and automate your digital life! 🚀
 
 ---
 
-_Made with ❤️ by supermemory (and honestly, claude code)_
+### 🙏 Credits
+
+**Original Project:** [apple-mcp by supermemory](https://github.com/supermemoryai/apple-mcp) - Made with ❤️ by [Dhravya](https://github.com/Dhravya) and the supermemory team (and honestly, claude code)
+
+**Performance Fork:** Enhanced by [Doug Purnell](https://github.com/dcpurnell) with Python native frameworks for 126x faster operations
+
+**Major Improvements:**
+- Python EventKit for Calendar (126x speedup)
+- Python Contacts framework (~1s queries vs slow AppleScript)
+- Optimized Reminders queries
+- Native macOS framework integration

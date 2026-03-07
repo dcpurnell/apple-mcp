@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
+import { fileURLToPath } from "url";
 import { validateText, validateSearchQuery } from './input-validation';
 
 const execFileAsync = promisify(execFile);
@@ -14,7 +15,9 @@ const CONFIG = {
 };
 
 // Path to the Python EventKit bridge script
-const PYTHON_SCRIPT = path.join(process.cwd(), "calendar-eventkit.py");
+// Use import.meta.url to get reliable path regardless of cwd
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PYTHON_SCRIPT = path.join(__dirname, "..", "calendar-eventkit.py");
 
 // Define types for calendar events
 interface CalendarEvent {

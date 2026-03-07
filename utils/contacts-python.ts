@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
+import { fileURLToPath } from "url";
 
 const execFileAsync = promisify(execFile);
 
@@ -11,7 +12,9 @@ const CONFIG = {
 };
 
 // Path to the Python Contacts bridge script
-const PYTHON_SCRIPT = path.join(process.cwd(), "contacts-framework.py");
+// Use import.meta.url to get reliable path regardless of cwd
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PYTHON_SCRIPT = path.join(__dirname, "..", "contacts-framework.py");
 
 // Define types for contacts
 interface Contact {

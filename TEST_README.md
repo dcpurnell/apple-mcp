@@ -43,7 +43,7 @@ This number is used consistently across all tests to ensure deterministic result
 
 ## 🧪 Test Structure
 
-```
+```text
 tests/
 ├── setup.ts                    # Test configuration & cleanup
 ├── fixtures/

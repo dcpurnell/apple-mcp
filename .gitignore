@@ -1,5 +1,8 @@
 # Based on https://raw.githubusercontent.com/github/gitignore/main/Node.gitignore
 
+# Local configuration (contains personal calendar/email details)
+config.local.ts
+
 # Logs
 
 logs

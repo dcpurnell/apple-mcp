@@ -27,12 +27,12 @@ The calendar module uses Python EventKit instead of AppleScript for performance:
 
 **Default calendars** (configurable in index.ts):
 
-- Doug Purnell
-- Goals
+- Personal
+- Work
 - Family
-- F3 Greensboro Events
-- <purnellbbq@gmail.com>
-- Holidays in United States
+- Holidays
+
+(Customize these with your own calendar names from the Calendar app sidebar)
 
 **Date range defaults:**
 

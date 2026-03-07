@@ -8,6 +8,14 @@ import {
 import { runAppleScript } from "run-applescript";
 import tools from "./tools";
 
+// Import local config if available (gitignored file with personal details)
+let localConfig: { DEFAULT_CALENDARS?: string[]; DEFAULT_MAILBOXES?: string[] } = {};
+try {
+	localConfig = await import("./config.local.js");
+} catch {
+	// No local config found, will use inline defaults
+}
+
 
 // Safe mode implementation - lazy loading of modules
 let useEagerLoading = true;
@@ -565,6 +573,13 @@ function initServer() {
 					try {
 						const mailModule = await loadModule("mail");
 
+						// Default mailboxes - use local config if available, otherwise use generic defaults
+						const DEFAULT_MAILBOXES = localConfig.DEFAULT_MAILBOXES || [
+							"personal@example.com",
+							"work@example.com",
+							"secondary@example.com"
+						];
+
 						switch (args.operation) {
 							case "unread": {
 								// If an account is specified, we'll try to search specifically in that account
@@ -701,8 +716,8 @@ end tell`;
 										emails = await mailModule.getUnreadMails(args.limit);
 									}
 								} else {
-									// No account specified, use the general method
-									emails = await mailModule.getUnreadMails(args.limit);
+									// No account specified, use default mailboxes
+									emails = await mailModule.getUnreadMails(args.limit, DEFAULT_MAILBOXES);
 								}
 
 								return {
@@ -731,9 +746,12 @@ end tell`;
 										"Search term is required for search operation",
 									);
 								}
+								// Use default mailboxes unless specific account is provided
+								const accountsToSearch = args.account ? undefined : DEFAULT_MAILBOXES;
 								const emails = await mailModule.searchMails(
 									args.searchTerm,
 									args.limit,
+									accountsToSearch,
 								);
 								return {
 									content: [
@@ -1045,14 +1063,12 @@ end tell`;
 						const calendarModule = await loadModule("calendar");
 						const { operation } = args;
 
-						// Default target calendars (user's 6 primary calendars)
-						const DEFAULT_CALENDARS = [
-							"Doug Purnell",
-							"Goals",
+						// Default calendars - use local config if available, otherwise use generic defaults
+						const DEFAULT_CALENDARS = localConfig.DEFAULT_CALENDARS || [
+							"Personal",
+							"Work",
 							"Family",
-							"F3 Greensboro Events",
-							"purnellbbq@gmail.com",
-							"Holidays in United States"
+							"Holidays"
 						];
 
 						// Helper to convert ISO date range to daysBack/daysForward

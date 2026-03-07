@@ -80,7 +80,7 @@ const CONTACTS_TOOL: Tool = {
   
   const MAIL_TOOL: Tool = {
     name: "mail",
-    description: "Interact with Apple Mail app - read unread emails, search emails, and send emails",
+    description: "Interact with Apple Mail app - read unread emails, search emails, and send emails. By default queries configured email accounts (customize in index.ts)",
     inputSchema: {
       type: "object",
       properties: {
@@ -184,7 +184,7 @@ const CONTACTS_TOOL: Tool = {
   
 const CALENDAR_TOOL: Tool = {
   name: "calendar",
-  description: "Search, create, and open calendar events in Apple Calendar app. Uses Python EventKit for fast queries (238ms for 21-day window). Default calendars: Doug Purnell, Goals, Family, F3 Greensboro Events, purnellbbq@gmail.com, Holidays in United States",
+  description: "Search, create, and open calendar events in Apple Calendar app. Uses Python EventKit for fast queries (238ms for 21-day window). Queries configured calendars by default (customize in index.ts)",
   inputSchema: {
     type: "object",
     properties: {
@@ -204,7 +204,7 @@ const CALENDAR_TOOL: Tool = {
       calendarNames: {
         type: "array",
         items: { type: "string" },
-        description: "Array of calendar names to query (optional). If not specified, queries these 6 calendars: Doug Purnell, Goals, Family, F3 Greensboro Events, purnellbbq@gmail.com, Holidays in United States"
+        description: "Array of calendar names to query (optional). If not specified, queries default calendars configured in index.ts"
       },
       limit: {
         type: "number",

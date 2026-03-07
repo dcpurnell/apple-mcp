@@ -133,6 +133,55 @@ Without these frameworks, calendar and contact features will still work but may 
 
 </details>
 
+## ⚙️ Configuration (Customize Your Defaults)
+
+The server uses a **local configuration file** that's gitignored, so your personal details never get committed.
+
+### 🔧 Quick Setup
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/dcpurnell/apple-mcp.git
+   cd apple-mcp
+   ```
+
+2. Copy the example config and customize it:
+   ```bash
+   cp config.local.example.ts config.local.ts
+   ```
+
+3. Edit `config.local.ts` with your personal calendar and email account names:
+   ```typescript
+   export const DEFAULT_CALENDARS = [
+     "Personal",      // Your calendar names from Calendar.app
+     "Work",
+     "Family",
+     "Holidays"
+   ];
+
+   export const DEFAULT_MAILBOXES = [
+     "you@gmail.com",        // Your email accounts from Mail.app
+     "work@company.com",
+     "personal@icloud.com"
+   ];
+   ```
+
+4. Install and run:
+   ```bash
+   bun install
+   bun run index.ts
+   ```
+
+**Your `config.local.ts` is gitignored** - it will never be committed or pushed to GitHub. Safe to customize!
+
+### 📅 Finding Your Calendar Names
+
+Open Calendar.app and look at the sidebar. Use the exact names you see there (case-sensitive).
+
+### 📧 Finding Your Email Account Names
+
+Open Mail.app and go to **Mail > Settings > Accounts**. Use the account names exactly as shown.
+
 ## 🎬 See It In Action
 
 Here's a step-by-step video walkthrough: <https://x.com/DhravyaShah/status/1892694077679763671>

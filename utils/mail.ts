@@ -70,8 +70,10 @@ async function requestMailAccess(): Promise<{ hasAccess: boolean; message: strin
 
 /**
  * Get unread emails from Mail app (limited for performance)
+ * @param limit - Maximum number of emails to return  
+ * @param accountNames - Optional array of account names to filter (not yet implemented in AppleScript)
  */
-async function getUnreadMails(limit = 10): Promise<EmailMessage[]> {
+async function getUnreadMails(limit = 10, accountNames?: string[]): Promise<EmailMessage[]> {
 	try {
 		const accessResult = await requestMailAccess();
 		if (!accessResult.hasAccess) {
@@ -159,10 +161,14 @@ end tell`;
 
 /**
  * Search for emails by search term
+ * @param searchTerm - Text to search for in email subjects
+ * @param limit - Maximum number of emails to return
+ * @param accountNames - Optional array of account names to filter (not yet implemented in AppleScript)
  */
 async function searchMails(
 	searchTerm: string,
 	limit = 10,
+	accountNames?: string[],
 ): Promise<EmailMessage[]> {
 	try {
 		const accessResult = await requestMailAccess();

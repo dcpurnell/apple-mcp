@@ -17,7 +17,7 @@ let safeModeFallback = false;
 console.error("Starting apple-mcp server...");
 
 // Placeholders for modules - will either be loaded eagerly or lazily
-let contacts: typeof import("./utils/contacts").default | null = null;
+let contacts: typeof import("./utils/contacts-python") | null = null;
 let notes: typeof import("./utils/notes").default | null = null;
 let message: typeof import("./utils/message").default | null = null;
 let mail: typeof import("./utils/mail").default | null = null;
@@ -28,7 +28,7 @@ let maps: typeof import("./utils/maps").default | null = null;
 
 // Type map for module names to their types
 type ModuleMap = {
-	contacts: typeof import("./utils/contacts").default;
+	contacts: typeof import("./utils/contacts-python");
 	notes: typeof import("./utils/notes").default;
 	message: typeof import("./utils/message").default;
 	mail: typeof import("./utils/mail").default;
@@ -55,7 +55,7 @@ async function loadModule<
 	try {
 		switch (moduleName) {
 			case "contacts":
-				if (!contacts) contacts = (await import("./utils/contacts")).default;
+				if (!contacts) contacts = await import("./utils/contacts-python");
 				return contacts as ModuleMap[T];
 			case "notes":
 				if (!notes) notes = (await import("./utils/notes")).default;
@@ -214,23 +214,66 @@ function initServer() {
 						const contactsModule = await loadModule("contacts");
 
 						if (args.name) {
-							const numbers = await contactsModule.findNumber(args.name);
+							// Search for specific contact by name
+							const contacts = await contactsModule.searchContacts(args.name, 10);
+							
+							if (contacts.length === 0) {
+								return {
+									content: [
+										{
+											type: "text",
+											text: `No contact found for "${args.name}". Try a different name or omit the name parameter to list all contacts.`,
+										},
+									],
+									isError: false,
+								};
+							}
+
+							// Format contacts with phone numbers, emails, and address
+							const formattedContacts = contacts.map((contact: any) => {
+								const parts = [`📋 ${contact.fullName}`];
+								
+								if (contact.company && contact.company !== contact.fullName) {
+									parts.push(`   🏢 ${contact.company}`);
+								}
+								
+								if (contact.phoneNumbers && contact.phoneNumbers.length > 0) {
+									contact.phoneNumbers.forEach((phone: any) => {
+										parts.push(`   📞 ${phone.number}`);
+									});
+								}
+								
+								if (contact.emails && contact.emails.length > 0) {
+									contact.emails.forEach((email: any) => {
+										parts.push(`   📧 ${email.email}`);
+									});
+								}
+								
+								if (contact.addresses && contact.addresses.length > 0) {
+									const addr = contact.addresses[0];
+									const addrParts = [addr.street, addr.city, addr.state, addr.postalCode].filter(p => p);
+									if (addrParts.length > 0) {
+										parts.push(`   🏠 ${addrParts.join(', ')}`);
+									}
+								}
+								
+								return parts.join('\n');
+							});
+
 							return {
 								content: [
 									{
 										type: "text",
-										text: numbers.length
-											? `${args.name}: ${numbers.join(", ")}`
-											: `No contact found for "${args.name}". Try a different name or use no name parameter to list all contacts.`,
+										text: `Found ${contacts.length} contact(s) matching "${args.name}":\n\n${formattedContacts.join('\n\n')}`,
 									},
 								],
 								isError: false,
 							};
 						} else {
-							const allNumbers = await contactsModule.getAllNumbers();
-							const contactCount = Object.keys(allNumbers).length;
+							// Get all contacts (limited to first 50)
+							const allContacts = await contactsModule.getAllContacts(50);
 
-							if (contactCount === 0) {
+							if (allContacts.length === 0) {
 								return {
 									content: [
 										{
@@ -242,18 +285,26 @@ function initServer() {
 								};
 							}
 
-							const formattedContacts = Object.entries(allNumbers)
-								.filter(([_, phones]) => phones.length > 0)
-								.map(([name, phones]) => `${name}: ${phones.join(", ")}`);
+							// Format contacts - show name and primary phone/email
+							const formattedContacts = allContacts.map((contact: any) => {
+								const parts = [contact.fullName];
+								
+								if (contact.phoneNumbers && contact.phoneNumbers.length > 0) {
+									parts.push(contact.phoneNumbers[0].number);
+								}
+								
+								if (contact.emails && contact.emails.length > 0) {
+									parts.push(contact.emails[0].email);
+								}
+								
+								return parts.join(' | ');
+							});
 
 							return {
 								content: [
 									{
 										type: "text",
-										text:
-											formattedContacts.length > 0
-												? `Found ${contactCount} contacts:\n\n${formattedContacts.join("\n")}`
-												: "Found contacts but none have phone numbers. Try searching by name to see more details.",
+										text: `Found ${allContacts.length} contacts${allContacts.length >= 50 ? ' (showing first 50)' : ''}:\n\n${formattedContacts.join('\n')}`,
 									},
 								],
 								isError: false,

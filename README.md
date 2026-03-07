@@ -62,13 +62,13 @@
 - **Default 21-day window** (7 days back, 14 forward - perfect for weekly reviews)
 - **Lightning fast queries** (~238ms vs 30+ seconds with AppleScript)
 
-### 🗺️ **Maps** - For people who still get lost with GPS
+### 🗺️ **Maps** - ⚠️ Currently Disabled
 
-- Search locations (find that coffee shop with the weird name)
-- Save favorites (bookmark your life's important spots)
-- Get directions (finally stop asking Siri while driving)
-- Create guides (be that friend who plans everything)
-- Drop pins like you're claiming territory
+**Status:** Disabled due to Apple Maps API limitations.
+
+**Why?** Unlike Calendar (EventKit) and Contacts (Contacts framework), Apple Maps has no native programmatic API. The previous JXA/AppleScript implementation was unreliable and returned empty results because `selectedLocation()` methods are not supported consistently.
+
+**Future Plans:** Considering integration with alternative geocoding services (OpenStreetMap Nominatim, etc.) or waiting for Apple to provide a proper Maps framework.
 
 ## 🎭 The Magic of Chaining Commands
 

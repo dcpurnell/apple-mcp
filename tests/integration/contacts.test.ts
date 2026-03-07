@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { TEST_DATA } from "../fixtures/test-data.js";
 import { assertNotEmpty, assertValidPhoneNumber } from "../helpers/test-utils.js";
-import contactsModule from "../../utils/contacts.js";
+import * as contactsModule from "../../utils/contacts-python.js";
 
 describe("Contacts Integration Tests", () => {
   describe("getAllNumbers", () => {

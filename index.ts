@@ -110,7 +110,7 @@ async function attemptEagerLoading() {
 		console.error("Attempting to eagerly load modules...");
 
 		// Try to import all modules
-		contacts = (await import("./utils/contacts")).default;
+		contacts = await import("./utils/contacts-python");
 		console.error("- Contacts module loaded successfully");
 
 		notes = (await import("./utils/notes")).default;
@@ -126,7 +126,7 @@ async function attemptEagerLoading() {
 		console.error("- Reminders module loaded successfully");
 
 
-		calendar = (await import("./utils/calendar")).default;
+		calendar = await import("./utils/calendar-python");
 		console.error("- Calendar module loaded successfully");
 
 		maps = (await import("./utils/maps")).default;

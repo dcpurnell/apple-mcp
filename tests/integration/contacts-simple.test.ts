@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { TEST_DATA } from "../fixtures/test-data.js";
-import contactsModule from "../../utils/contacts.js";
+import * as contactsModule from "../../utils/contacts-python.js";
 
 describe("Contacts Simple Tests", () => {
 	describe("Basic Contacts Access", () => {

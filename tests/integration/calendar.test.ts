@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { TEST_DATA } from "../fixtures/test-data.js";
 import { assertNotEmpty, assertValidDate, sleep } from "../helpers/test-utils.js";
-import calendarModule from "../../utils/calendar.js";
+import * as calendarModule from "../../utils/calendar-python.js";
 
 describe("Calendar Integration Tests", () => {
   describe("getEvents", () => {

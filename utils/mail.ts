@@ -1,6 +1,6 @@
 import { runAppleScript } from "run-applescript";
 import { escapeAppleScript, getSecureTempFile } from "./applescript-escape";
-import { validateEmail, validateText, VALIDATION_LIMITS } from "./input-validation";
+import { validateEmail, validateText, validateSearchQuery, VALIDATION_LIMITS } from "./input-validation";
 
 // Configuration
 const CONFIG = {
@@ -525,15 +525,16 @@ tell application "Mail"
         repeat with mb in acctMailboxes
             try
                 set messagesList to (messages of mb)
-                set sortedMessages to my sortMessagesByDate(messagesList)
+                -- Messages are already in reverse chronological order (newest first)
+                -- We just need to limit the count
                 set msgLimit to ${limit}
-                if (count of sortedMessages) < msgLimit then
-                    set msgLimit to (count of sortedMessages)
+                if (count of messagesList) < msgLimit then
+                    set msgLimit to (count of messagesList)
                 end if
 
                 repeat with i from 1 to msgLimit
                     try
-                        set currentMsg to item i of sortedMessages
+                        set currentMsg to item i of messagesList
                         set msgData to {subject:(subject of currentMsg), sender:(sender of currentMsg), ¬
                                     date:(date sent of currentMsg) as string, mailbox:(name of mb)}
 
@@ -563,12 +564,7 @@ tell application "Mail"
     end try
 
     return resultList
-end tell
-
-on sortMessagesByDate(messagesList)
-    set sortedMessages to sort messagesList by date sent
-    return sortedMessages
-end sortMessagesByDate`;
+end tell`;
 
 		const asResult = await runAppleScript(script);
 

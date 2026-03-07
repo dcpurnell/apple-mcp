@@ -34,10 +34,11 @@ Click below for one click install with `.dxt`
 - Search through that digital mess you call "organized notes"
 - Actually find that brilliant idea you wrote down 3 months ago
 
-### 👥 **Contacts** - Your personal network, digitized
+### 👥 **Contacts** - Your personal network, digitized ⚡ Python Contacts Framework
 
 - Find anyone in your contacts without scrolling forever
-- Get phone numbers instantly (no more "hey, what's your number again?")
+- Get full contact details instantly: phone, email, address, notes
+- Search by name, phone, email, or company (~1 second queries)
 - Actually use that contact database you've been building for years
 
 ### 📧 **Mail** - Email like a pro (or at least pretend to)
@@ -118,15 +119,19 @@ Then add this to your `claude_desktop_config.json`:
 }
 ```
 
-**📦 Calendar Feature Requires Python EventKit**
+**📦 Calendar & Contacts Features Require Python Frameworks**
 
-For fast calendar queries, install the Python EventKit framework:
+For fast calendar and contact queries, install the Python frameworks:
 
 ```bash
-pip3 install pyobjc-framework-EventKit
+pip3 install pyobjc-framework-EventKit pyobjc-framework-Contacts
 ```
 
-This enables lightning-fast calendar operations (~238ms vs 30+ seconds with AppleScript). Without it, calendar features will still work but may be slower.
+This enables:
+- ⚡ **Calendar**: Lightning-fast operations (~238ms vs 30+ seconds with AppleScript)
+- ⚡ **Contacts**: Fast contact searches with full details (~1 second per query)
+
+Without these frameworks, calendar and contact features will still work but may be significantly slower.
 
 </details>
 

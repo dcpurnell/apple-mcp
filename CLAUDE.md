@@ -33,6 +33,26 @@ The calendar module uses Python EventKit instead of AppleScript for performance:
 - `daysForward`: 14 days
 - Total: 21-day window (perfect for weekly reviews)
 
+### Contacts Implementation (Python Contacts Framework)
+The contacts module uses Python Contacts framework for fast queries and full contact details:
+- **Performance**: ~1 second per query (search or list all)
+- **Capabilities**: Find contacts by name, phone, email, or company with full details
+
+**File structure:**
+- `contacts-framework.py`: Python bridge using native macOS Contacts framework
+- `utils/contacts-python.ts`: TypeScript wrapper that calls Python script via execFile
+- `utils/contacts.ts`: Original AppleScript implementation (deprecated, kept for reference)
+
+**Dependencies:**
+- `pyobjc-framework-Contacts`: Python package for native Contacts framework access
+- Installed via: `pip3 install pyobjc-framework-Contacts`
+
+**Features:**
+- `getAllContacts(limit)`: Fetch all contacts with optional limit
+- `searchContacts(searchTerm, limit)`: Search by name, phone, email, company
+- Returns full contact objects: phone numbers, emails, addresses, notes
+- Rich formatting in MCP handler with emoji icons (📋📞📧🏠)
+
 ### Reminders Optimization
 Reminders module was optimized to query incomplete items only:
 - `getIncompleteReminders(listName)`: Query specific list for incomplete items
@@ -88,3 +108,9 @@ Reminders module was optimized to query incomplete items only:
 - Query incomplete items only when possible
 - Encourage users to archive completed items
 - Use list-specific queries instead of global searches
+
+### Contacts
+- Use Python Contacts framework for fast searches (~1 second)
+- Query returns full contact details in single call (phone, email, address, notes)
+- Set reasonable limits (default 10 for search, 50 for list all) to avoid excessive data transfer
+- Search by any field: name, phone, email, company

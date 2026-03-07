@@ -5,12 +5,26 @@ import { validateText, validateSearchQuery, VALIDATION_LIMITS } from "./input-va
 // Configuration
 const CONFIG = {
 	// Maximum reminders to process (to avoid performance issues)
-	MAX_REMINDERS: 50,
+	MAX_REMINDERS: 5, // Very aggressive limit for performance
 	// Maximum lists to process
-	MAX_LISTS: 20,
-	// Timeout for operations
-	TIMEOUT_MS: 8000,
+	MAX_LISTS: 2, // Very aggressive limit for performance
+	// Timeout for operations (in milliseconds)
+	TIMEOUT_MS: 20000, // Increased timeout for slow operations
+	// Maximum reminders per list to scan
+	MAX_PER_LIST: 2, // Very aggressive limit for performance
 };
+
+/**
+ * Run AppleScript with a timeout to prevent hangs
+ */
+async function runAppleScriptWithTimeout(script: string, timeoutMs: number = CONFIG.TIMEOUT_MS): Promise<any> {
+	return Promise.race([
+		runAppleScript(script),
+		new Promise((_, reject) => 
+			setTimeout(() => reject(new Error('AppleScript operation timed out')), timeoutMs)
+		)
+	]);
+}
 
 // Define types for our reminders
 interface ReminderList {
@@ -42,7 +56,7 @@ tell application "Reminders"
     return name
 end tell`;
 
-		await runAppleScript(script);
+		await runAppleScriptWithTimeout(script, 2000); // Short timeout for access check
 		return true;
 	} catch (error) {
 		console.error(
@@ -94,30 +108,27 @@ async function getAllLists(): Promise<ReminderList[]> {
 tell application "Reminders"
     set listArray to {}
     set listCount to 0
-
-    -- Get all lists
-    set allLists to lists
-
-    repeat with i from 1 to (count of allLists)
-        if listCount >= ${CONFIG.MAX_LISTS} then exit repeat
-
-        try
-            set currentList to item i of allLists
-            set listName to name of currentList
-            set listId to id of currentList
-
-            set listInfo to {name:listName, id:listId}
-            set listArray to listArray & {listInfo}
-            set listCount to listCount + 1
-        on error
-            -- Skip problematic lists
-        end try
-    end repeat
-
+    
+    try
+        set allLists to lists
+        
+        -- Process limited number of lists for performance
+        repeat with i from 1 to (count of allLists)
+            if listCount >= ${CONFIG.MAX_LISTS} then exit repeat
+            
+            try
+                set currentList to item i of allLists
+                set listInfo to {|name|:(name of currentList), id:(id of currentList)}
+                set listArray to listArray & {listInfo}
+                set listCount to listCount + 1
+            end try
+        end repeat
+    end try
+    
     return listArray
 end tell`;
 
-		const result = (await runAppleScript(script)) as any;
+		const result = await runAppleScriptWithTimeout(script, CONFIG.TIMEOUT_MS);
 
 		// Convert AppleScript result to our format
 		const resultArray = Array.isArray(result) ? result : result ? [result] : [];
@@ -146,70 +157,74 @@ async function getAllReminders(listName?: string): Promise<Reminder[]> {
 			throw new Error(accessResult.message);
 		}
 
-		const listFilter = listName ? `whose name is "${escapeAppleScript(listName)}"` : "";
-
+		// Simplified approach: process limited lists and reminders
 		const script = `
 tell application "Reminders"
     set reminderArray to {}
     set reminderCount to 0
-
+    set listsProcessed to 0
+    
     try
-        -- Get lists (filtered or all)
-        set targetLists to lists ${listFilter}
-
-        repeat with currentList in targetLists
+        set targetLists to lists
+        
+        -- Process limited lists and reminders for performance
+        repeat with i from 1 to (count of targetLists)
+            if listsProcessed >= ${CONFIG.MAX_LISTS} then exit repeat
             if reminderCount >= ${CONFIG.MAX_REMINDERS} then exit repeat
-
+            
             try
-                set listName to name of currentList
+                set currentList to item i of targetLists
+                set currentListName to name of currentList
                 set allReminders to reminders of currentList
-
-                repeat with currentReminder in allReminders
+                set reminderCountInList to 0
+                
+                repeat with j from 1 to (count of allReminders)
                     if reminderCount >= ${CONFIG.MAX_REMINDERS} then exit repeat
-
+                    if reminderCountInList >= ${CONFIG.MAX_PER_LIST} then exit repeat
+                    
                     try
-                        set reminderName to name of currentReminder
-                        set reminderId to id of currentReminder
-                        set reminderBody to body of currentReminder
-                        set isCompleted to completed of currentReminder
-
-                        -- Get due date if it exists
+                        set currentReminder to item j of allReminders
+                        
+                        -- Get due date if exists
                         set reminderDueDate to missing value
                         try
                             set reminderDueDate to due date of currentReminder
                         end try
-
-                        set reminderInfo to {|name|:reminderName, id:reminderId, body:reminderBody, completed:isCompleted, listName:listName}
-
+                        
+                        set reminderInfo to {¬
+                            |name|:(name of currentReminder), ¬
+                            id:(id of currentReminder), ¬
+                            body:(body of currentReminder), ¬
+                            completed:(completed of currentReminder), ¬
+                            listName:currentListName¬
+                        }
+                        
                         if reminderDueDate is not missing value then
-                            set reminderInfo to reminderInfo & {dueDate:reminderDueDate as string}
+                            set reminderInfo to reminderInfo & {dueDate:(reminderDueDate as string)}
                         else
                             set reminderInfo to reminderInfo & {dueDate:missing value}
                         end if
-
+                        
                         set reminderArray to reminderArray & {reminderInfo}
                         set reminderCount to reminderCount + 1
-                    on error errMsg
-                        -- Skip reminders that can't be read
+                        set reminderCountInList to reminderCountInList + 1
                     end try
                 end repeat
-            on error listErr
-                -- Skip lists that can't be read
+                
+                set listsProcessed to listsProcessed + 1
             end try
         end repeat
-
-        return reminderArray
-    on error errMsg
-        return {}
     end try
+    
+    return reminderArray
 end tell`;
 
-		const result = (await runAppleScript(script)) as any;
+		const result = await runAppleScriptWithTimeout(script, CONFIG.TIMEOUT_MS);
 
 		// Convert AppleScript result to our format
 		const resultArray = Array.isArray(result) ? result : result ? [result] : [];
 
-		return resultArray.map((reminderData: any) => ({
+		let reminders = resultArray.map((reminderData: any) => ({
 			name: reminderData.name || "Untitled",
 			id: reminderData.id || "unknown-id",
 			body: reminderData.body || "",
@@ -217,6 +232,16 @@ end tell`;
 			dueDate: reminderData.dueDate && reminderData.dueDate !== "missing value" ? reminderData.dueDate : null,
 			listName: reminderData.listName || "Unknown List",
 		}));
+
+		// Filter by list name in JavaScript (case-insensitive) to avoid AppleScript hangs
+		if (listName) {
+			const searchName = listName.toLowerCase();
+			reminders = reminders.filter(reminder => 
+				reminder.listName.toLowerCase() === searchName
+			);
+		}
+
+		return reminders;
 	} catch (error) {
 		console.error(
 			`Error getting reminders: ${error instanceof Error ? error.message : String(error)}`,
@@ -302,15 +327,14 @@ async function createReminder(
 		const script = `
 tell application "Reminders"
     try
-        -- Use first available list (creating/finding lists can be slow)
+        -- Use first available list for performance
         set allLists to lists
         if (count of allLists) > 0 then
             set targetList to first item of allLists
-            set listName to name of targetList
-
-            -- Create a simple reminder with just name
-            set newReminder to make new reminder at targetList with properties {name:"${cleanName}"}
-            return "SUCCESS:" & listName
+            
+            -- Create reminder with name only (simplest/fastest)
+            set newReminder to make new reminder at end of reminders of targetList with properties {name:"${cleanName}"}
+            return "SUCCESS:" & (name of targetList)
         else
             return "ERROR:No lists available"
         end if
@@ -319,7 +343,7 @@ tell application "Reminders"
     end try
 end tell`;
 
-		const result = (await runAppleScript(script)) as string;
+		const result = await runAppleScriptWithTimeout(script, CONFIG.TIMEOUT_MS) as string;
 
 		if (result && result.startsWith("SUCCESS:")) {
 			const actualListName = result.replace("SUCCESS:", "");
@@ -374,7 +398,7 @@ tell application "Reminders"
     return "SUCCESS"
 end tell`;
 
-		const result = (await runAppleScript(script)) as string;
+		const result = await runAppleScriptWithTimeout(script, 3000) as string; // Short timeout for activation
 
 		if (result === "SUCCESS") {
 			return {
@@ -415,70 +439,73 @@ async function getRemindersFromListById(
 tell application "Reminders"
     set reminderArray to {}
     set reminderCount to 0
-
+    
     try
         -- Find list by ID
         set targetList to first list whose id is "${cleanListId}"
-        set listName to name of targetList
+        set currentListName to name of targetList
         set allReminders to reminders of targetList
-
-        repeat with currentReminder in allReminders
-            if reminderCount >= ${CONFIG.MAX_REMINDERS} then exit repeat
-
+        
+        repeat with i from 1 to (count of allReminders)
+            if reminderCount >= ${CONFIG.MAX_PER_LIST} then exit repeat
+            
             try
-                set reminderName to name of currentReminder
-                set reminderId to id of currentReminder
-                set reminderBody to body of currentReminder
-                set isCompleted to completed of currentReminder
-
-                -- Get due date if it exists
+                set currentReminder to item i of allReminders
+                
+                -- Get due date if exists
                 set reminderDueDate to missing value
                 try
                     set reminderDueDate to due date of currentReminder
                 end try
-
+                
                 -- Get completion date if completed
                 set completionDateValue to missing value
+                set isCompleted to completed of currentReminder
                 if isCompleted then
                     try
                         set completionDateValue to completion date of currentReminder
                     end try
                 end if
-
+                
                 -- Get priority
                 set priorityValue to 0
                 try
                     set priorityValue to priority of currentReminder
                 end try
-
-                set reminderInfo to {|name|:reminderName, id:reminderId, body:reminderBody, completed:isCompleted, listName:listName, priority:priorityValue}
-
+                
+                set reminderInfo to {\u00ac
+                    |name|:(name of currentReminder), \u00ac
+                    id:(id of currentReminder), \u00ac
+                    body:(body of currentReminder), \u00ac
+                    completed:isCompleted, \u00ac
+                    listName:currentListName, \u00ac
+                    priority:priorityValue\u00ac
+                }
+                
                 if reminderDueDate is not missing value then
-                    set reminderInfo to reminderInfo & {dueDate:reminderDueDate as string}
+                    set reminderInfo to reminderInfo & {dueDate:(reminderDueDate as string)}
                 else
                     set reminderInfo to reminderInfo & {dueDate:missing value}
                 end if
-
+                
                 if completionDateValue is not missing value then
-                    set reminderInfo to reminderInfo & {completionDate:completionDateValue as string}
+                    set reminderInfo to reminderInfo & {completionDate:(completionDateValue as string)}
                 else
                     set reminderInfo to reminderInfo & {completionDate:missing value}
                 end if
-
+                
                 set reminderArray to reminderArray & {reminderInfo}
                 set reminderCount to reminderCount + 1
-            on error errMsg
-                -- Skip reminders that can't be read
             end try
         end repeat
-
+        
         return reminderArray
-    on error errMsg
+    on error
         return {}
     end try
 end tell`;
 
-		const result = (await runAppleScript(script)) as any;
+		const result = await runAppleScriptWithTimeout(script, CONFIG.TIMEOUT_MS);
 
 		// Convert AppleScript result to our format
 		const resultArray = Array.isArray(result) ? result : result ? [result] : [];

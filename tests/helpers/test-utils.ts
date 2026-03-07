@@ -2,6 +2,21 @@ import { run } from "@jxa/run";
 import { runAppleScript } from "run-applescript";
 import { TEST_DATA } from "../fixtures/test-data.js";
 
+// Timeout for test setup operations
+const SETUP_TIMEOUT_MS = 5000;
+
+/**
+ * Run AppleScript with a timeout to prevent hangs during test setup
+ */
+async function runAppleScriptWithTimeout(script: string, timeoutMs: number = SETUP_TIMEOUT_MS): Promise<any> {
+	return Promise.race([
+		runAppleScript(script),
+		new Promise((_, reject) => 
+			setTimeout(() => reject(new Error('AppleScript operation timed out during test setup')), timeoutMs)
+		)
+	]);
+}
+
 export interface TestDataManager {
   setupTestData: () => Promise<void>;
   cleanupTestData: () => Promise<void>;
@@ -58,7 +73,7 @@ tell application "Contacts"
     end if
 end tell`;
     
-    await runAppleScript(script);
+    await runAppleScriptWithTimeout(script, 3000);
   } catch (error) {
     console.warn("Could not set up test contact:", error);
   }
@@ -78,7 +93,7 @@ tell application "Notes"
     end if
 end tell`;
     
-    await runAppleScript(script);
+    await runAppleScriptWithTimeout(script, 3000);
   } catch (error) {
     console.warn("Could not set up test notes folder:", error);
   }
@@ -98,7 +113,7 @@ tell application "Reminders"
     end if
 end tell`;
     
-    await runAppleScript(script);
+    await runAppleScriptWithTimeout(script, 3000);
   } catch (error) {
     console.warn("Could not set up test reminders list:", error);
   }
@@ -118,7 +133,7 @@ tell application "Calendar"
     end if
 end tell`;
     
-    await runAppleScript(script);
+    await runAppleScriptWithTimeout(script, 3000);
   } catch (error) {
     console.warn("Could not set up test calendar:", error);
   }
@@ -155,7 +170,7 @@ tell application "Notes"
     return "Test notes cleaned up"
 end tell`;
     
-    await runAppleScript(script);
+    await runAppleScriptWithTimeout(script, 3000);
   } catch (error) {
     console.warn("Could not clean up test notes:", error);
   }
@@ -174,7 +189,7 @@ tell application "Reminders"
     return "Test reminders cleaned up"
 end tell`;
     
-    await runAppleScript(script);
+    await runAppleScriptWithTimeout(script, 3000);
   } catch (error) {
     console.warn("Could not clean up test reminders:", error);
   }
@@ -199,7 +214,7 @@ tell application "Calendar"
     return "Test calendar cleaned up"
 end tell`;
     
-    await runAppleScript(script);
+    await runAppleScriptWithTimeout(script, 3000);
   } catch (error) {
     console.warn("Could not clean up test calendar:", error);
   }

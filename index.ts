@@ -836,17 +836,20 @@ end tell`;
 						const { operation } = args;
 
 						if (operation === "list") {
-							// List all reminders
-							const lists = await remindersModule.getAllLists();
+							// List all reminders (don't also get lists separately to avoid double processing)
 							const allReminders = await remindersModule.getAllReminders();
+							
+							// Extract unique list names from reminders to show available lists
+							const uniqueLists = Array.from(new Set(allReminders.map(r => r.listName)));
+							
 							return {
 								content: [
 									{
 										type: "text",
-										text: `Found ${lists.length} lists and ${allReminders.length} reminders.`,
+										text: `Found ${uniqueLists.length} lists with ${allReminders.length} reminders.`,
 									},
 								],
-								lists,
+								listNames: uniqueLists,
 								reminders: allReminders,
 								isError: false,
 							};

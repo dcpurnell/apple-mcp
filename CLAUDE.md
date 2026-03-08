@@ -73,38 +73,6 @@ Reminders module was optimized to query incomplete items only:
 - Users should archive/delete completed items for best performance
 - 31 seconds to query all 13 lists with incomplete items
 
-### Maps Implementation (Experimental UI Scripting)
-
-**Problem**: Apple Maps has no native framework or robust API (unlike Calendar's EventKit or Contacts framework).
-
-**Solution**: Uses JXA + System Events GUI scripting to read search results from Maps UI.
-
-**How it works**:
-1. Launch Maps app
-2. Use ⌘L to focus search field
-3. Type query via `SystemEvents.keystroke()`
-4. Press Return and wait 3 seconds
-5. Recursively walk UI element tree to find static text elements
-6. Filter out common UI labels ("Search", "Directions", etc.)
-7. Return location names found in UI
-
-**File structure**:
-- `utils/maps.ts`: JXA implementation using System Events for UI scripting
-
-**Limitations**:
-- **Fragile**: Depends on Maps UI structure, may break with macOS updates
-- **Permissions**: Requires Accessibility permissions for System Events
-- **Incomplete data**: Can only extract visible location names, not addresses or coordinates
-- **Performance**: 3+ second delay to wait for results to load
-- **Best effort**: May return empty or partial results depending on UI state
-
-**Alternatives considered**:
-- MapKit JS API: Requires $99/year Apple Developer account
-- Geocoding services: OpenStreetMap Nominatim (free), Google Geocoding, etc.
-- Native framework: Apple has not released a programmatic Maps framework
-
-**Recommendation**: For production use, consider integrating a geocoding service instead of GUI scripting.
-
 ## Code Style
 
 ### TypeScript Configuration

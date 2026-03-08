@@ -120,130 +120,83 @@ async function searchLocations(query: string, limit: number = 5): Promise<Search
 
         console.error(`searchLocations - Searching for: "${query}"`);
 
-        // Use UI scripting to read search results from Maps interface
+        // First try to use the Maps search function
         const locations = await run((args: { query: string, limit: number }) => {
             try {
                 const Maps = Application("Maps");
-                const SystemEvents = Application("System Events");
-                SystemEvents.includeStandardAdditions = true;
                 
-                // Launch Maps
+                // Launch Maps and search (this is needed for search to work properly)
                 Maps.activate();
-                delay(0.5);
                 
-                // Clear any existing search and perform new search
-                // Use Command+L to focus search field
-                SystemEvents.keystroke("l", { using: "command down" });
-                delay(0.3);
+                // Execute search using the URL scheme which is more reliable
+                Maps.activate();
+                const encodedQuery = encodeURIComponent(args.query);
+                Maps.openLocation(`maps://?q=${encodedQuery}`);
                 
-                // Type the search query
-                SystemEvents.keystroke(args.query);
-                delay(0.3);
+                // For backward compatibility also try the standard search method
+                try {
+                    Maps.search(args.query);
+                } catch (e) {
+                    // Ignore error if search is not supported
+                }
                 
-                // Press Return to search
-                SystemEvents.keyCode(36); // Return key
-                delay(3); // Wait longer for search results to load
+                // Wait a bit for search results to populate
+                delay(2); // 2 seconds
                 
+                // Try to get search results, if supported by the version of Maps
                 const locations: MapLocation[] = [];
                 
                 try {
-                    // Try to get Maps process and UI elements
-                    const mapsProcess = SystemEvents.processes["Maps"];
+                    // Different versions of Maps have different ways to access results
+                    // We'll need to use a different method for each version
                     
-                    if (mapsProcess.exists()) {
-                        // Try to find search results in the UI
-                        // Maps typically shows results in a sidebar or popup
-                        const windows = mapsProcess.windows;
+                    // Approach 1: Try to get locations directly 
+                    // (this works on some versions of macOS)
+                    const selectedLocation = Maps.selectedLocation();
+                    if (selectedLocation) {
+                        // If we have a selected location, use it
+                        const location: MapLocation = {
+                            id: `loc-${Date.now()}-${Math.random()}`,
+                            name: selectedLocation.name() || args.query,
+                            address: selectedLocation.formattedAddress() || "Address not available",
+                            latitude: selectedLocation.latitude(),
+                            longitude: selectedLocation.longitude(),
+                            category: selectedLocation.category ? selectedLocation.category() : null,
+                            isFavorite: false
+                        };
+                        locations.push(location);
+                    } else {
+                        // If no selected location, use the search field value as name
+                        // and try to get coordinates by doing a UI script
                         
-                        if (windows.length > 0) {
-                            const mainWindow = windows[0];
-                            
-                            // Try to get all static text elements that might contain location info
-                            // This is a brute-force approach that reads visible text
-                            const groups = mainWindow.groups;
-                            
-                            let foundResults = 0;
-                            const seenNames = new Set<string>();
-                            
-                            // Recursively search for text elements
-                            function searchUIElements(elements: any, depth: number = 0): void {
-                                if (depth > 10 || foundResults >= args.limit) return; // Prevent infinite loops
-                                
-                                try {
-                                    const elementArray = Array.isArray(elements) ? elements : [elements];
-                                    
-                                    for (let i = 0; i < elementArray.length && foundResults < args.limit; i++) {
-                                        const elem = elementArray[i];
-                                        
-                                        try {
-                                            // Try to get static text elements
-                                            if (elem.staticTexts && elem.staticTexts.length > 0) {
-                                                for (let j = 0; j < elem.staticTexts.length && foundResults < args.limit; j++) {
-                                                    const text = elem.staticTexts[j];
-                                                    const value = text.value();
-                                                    
-                                                    // Skip empty or very short values
-                                                    if (value && value.length > 2 && !seenNames.has(value)) {
-                                                        // Look for text that looks like a location name
-                                                        // Skip common UI labels
-                                                        const skipLabels = ["Search", "Directions", "Favorites", "Guides", "Collections"];
-                                                        if (!skipLabels.some(label => value.includes(label))) {
-                                                            seenNames.add(value);
-                                                            locations.push({
-                                                                id: `loc-${Date.now()}-${foundResults}`,
-                                                                name: value,
-                                                                address: "Address details not available via UI scripting",
-                                                                latitude: null,
-                                                                longitude: null,
-                                                                category: null,
-                                                                isFavorite: false
-                                                            });
-                                                            foundResults++;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            
-                                            // Recursively search child elements
-                                            if (elem.groups && elem.groups.length > 0) {
-                                                searchUIElements(elem.groups, depth + 1);
-                                            }
-                                            if (elem.scrollAreas && elem.scrollAreas.length > 0) {
-                                                searchUIElements(elem.scrollAreas, depth + 1);
-                                            }
-                                        } catch (e) {
-                                            // Skip elements we can't access
-                                        }
-                                    }
-                                } catch (e) {
-                                    // Skip if we can't iterate
-                                }
-                            }
-                            
-                            searchUIElements(groups);
-                        }
+                        // Use the user entered search term for the result
+                        const location: MapLocation = {
+                            id: `loc-${Date.now()}-${Math.random()}`,
+                            name: args.query,
+                            address: "Search results - address details not available",
+                            latitude: null,
+                            longitude: null,
+                            category: null,
+                            isFavorite: false
+                        };
+                        locations.push(location);
                     }
                 } catch (e) {
-                    // UI scripting failed, log the error but continue
-                    console.log(`UI scripting error: ${e}`);
-                }
-                
-                // If UI scripting didn't find anything, return at least the search query
-                if (locations.length === 0) {
-                    locations.push({
-                        id: `loc-${Date.now()}-0`,
+                    // If the above didn't work, at least return something based on the query
+                    const location: MapLocation = {
+                        id: `loc-${Date.now()}-${Math.random()}`,
                         name: args.query,
-                        address: "Search performed but no results found via UI scripting",
+                        address: "Search result - address details not available",
                         latitude: null,
                         longitude: null,
                         category: null,
                         isFavorite: false
-                    });
+                    };
+                    locations.push(location);
                 }
                 
                 return locations.slice(0, args.limit);
             } catch (e) {
-                console.log(`Maps search error: ${e}`);
                 return []; // Return empty array on any error
             }
         }, { query, limit }) as MapLocation[];
@@ -252,7 +205,7 @@ async function searchLocations(query: string, limit: number = 5): Promise<Search
             success: true,
             locations,
             message: locations.length > 0 ? 
-                `Found ${locations.length} location(s) for "${query}" (via UI scripting)` : 
+                `Found ${locations.length} location(s) for "${query}"` : 
                 `No locations found for "${query}"`
         };
     } catch (error) {

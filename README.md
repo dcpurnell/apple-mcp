@@ -62,13 +62,23 @@
 - **Default 21-day window** (7 days back, 14 forward - perfect for weekly reviews)
 - **Lightning fast queries** (~238ms vs 30+ seconds with AppleScript)
 
-### 🗺️ **Maps** - ⚠️ Currently Disabled
+### 🗺️ **Maps** - ⚠️ Experimental UI Scripting
 
-**Status:** Disabled due to Apple Maps API limitations.
+**Status:** Experimental - uses GUI scripting to read search results.
 
-**Why?** Unlike Calendar (EventKit) and Contacts (Contacts framework), Apple Maps has no native programmatic API. The previous JXA/AppleScript implementation was unreliable and returned empty results because `selectedLocation()` methods are not supported consistently.
+**How it works:** Since Apple Maps has no native programmatic API (unlike Calendar's EventKit or Contacts framework), this implementation uses System Events to:
+1. Focus the Maps search field (⌘L)
+2. Type the search query
+3. Press Enter and wait for results
+4. Read visible UI elements to extract location names
 
-**Future Plans:** Considering integration with alternative geocoding services (OpenStreetMap Nominatim, etc.) or waiting for Apple to provide a proper Maps framework.
+**Limitations:**
+- Fragile - may break with macOS updates
+- Requires Accessibility permissions for System Events
+- Cannot reliably get addresses, coordinates, or detailed location info
+- Results depend on Maps UI structure
+
+**Better alternatives:** Consider integrating with geocoding services (OpenStreetMap Nominatim, etc.) for production use.
 
 ## 🎭 The Magic of Chaining Commands
 

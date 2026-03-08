@@ -300,8 +300,8 @@ const MAPS_TOOL: Tool = {
   }
 };
 
-// Maps tool disabled due to unreliable Apple Maps API - no native framework support
-// const tools = [CONTACTS_TOOL, NOTES_TOOL, MESSAGES_TOOL, MAIL_TOOL, REMINDERS_TOOL, CALENDAR_TOOL, MAPS_TOOL];
-const tools = [CONTACTS_TOOL, NOTES_TOOL, MESSAGES_TOOL, MAIL_TOOL, REMINDERS_TOOL, CALENDAR_TOOL];
+// Maps tool re-enabled with improved UI scripting approach (experimental)
+// Note: This uses GUI scripting which is fragile and may break with macOS updates
+const tools = [CONTACTS_TOOL, NOTES_TOOL, MESSAGES_TOOL, MAIL_TOOL, REMINDERS_TOOL, CALENDAR_TOOL, MAPS_TOOL];
 
 export default tools;

@@ -425,17 +425,27 @@ async function createReminder(
 		const script = `
 tell application "Reminders"
     try
-        -- Use first available list for performance
-        set allLists to lists
-        if (count of allLists) > 0 then
-            set targetList to first item of allLists
-            
-            -- Create reminder with name only (simplest/fastest)
-            set newReminder to make new reminder at end of reminders of targetList with properties {name:"${cleanName}"}
-            return "SUCCESS:" & (name of targetList)
-        else
-            return "ERROR:No lists available"
+        -- Find target list by name (AppleScript 'is' comparison is case-insensitive)
+        set targetList to missing value
+        repeat with aList in lists
+            if (name of aList) is "${cleanListName}" then
+                set targetList to aList
+                exit repeat
+            end if
+        end repeat
+        
+        if targetList is missing value then
+            set listNames to {}
+            repeat with aList in lists
+                set end of listNames to (name of aList)
+            end repeat
+            return "ERROR:List \\"${cleanListName}\\" not found. Available lists: " & (listNames as string)
         end if
+        
+        -- Create reminder in the target list
+        set newReminder to make new reminder at end of reminders of targetList with properties {name:"${cleanName}"}
+        ${cleanNotes ? `set body of newReminder to "${cleanNotes}"` : ""}
+        return "SUCCESS:" & (name of targetList)
     on error errorMessage
         return "ERROR:" & errorMessage
     end try

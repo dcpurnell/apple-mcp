@@ -6,7 +6,15 @@ import {
 	ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { runAppleScript } from "run-applescript";
+import { escapeAppleScript } from "./utils/applescript-escape";
 import tools from "./tools";
+
+// Non-printable delimiters used to safely encode multi-field AppleScript
+// results as a single string (mirrors utils/mail.ts). Commas/braces break on
+// AppleScript dates like "Friday, July 24, 2026 at 1:22:20 PM".
+const FIELD_SEPARATOR = "\u001F"; // ASCII Unit Separator
+const RECORD_SEPARATOR = "\u001E"; // ASCII Record Separator
+
 
 // Import local config if available (gitignored file with personal details)
 let localConfig: { DEFAULT_CALENDARS?: string[]; DEFAULT_MAILBOXES?: string[] } = {};
@@ -580,6 +588,18 @@ function initServer() {
 							"secondary@example.com"
 						];
 
+						// Format an email for display, including its Message URL (if known)
+						// so it can be referenced/opened in other applications.
+						const formatEmailForDisplay = (email: any, contentLimit: number): string => {
+							const contentPreview =
+								email.content.substring(0, contentLimit) +
+								(email.content.length > contentLimit ? "..." : "");
+							const urlLine = email.messageUrl
+								? `\nMessage URL: ${email.messageUrl}`
+								: "";
+							return `[${email.dateSent}] From: ${email.sender}\nMailbox: ${email.mailbox}\nSubject: ${email.subject}${urlLine}\n${contentPreview}`;
+						};
+
 						switch (args.operation) {
 							case "unread": {
 								// If an account is specified, we'll try to search specifically in that account
@@ -589,11 +609,19 @@ function initServer() {
 										`Getting unread emails for account: ${args.account}`,
 									);
 									// Use AppleScript to get unread emails from specific account
+									const escapedAccount = escapeAppleScript(args.account);
+									const escapedMailbox = args.mailbox
+										? escapeAppleScript(args.mailbox)
+										: "";
+									const limit = args.limit || 10;
 									const script = `
 tell application "Mail"
-    set resultList to {}
+    set FS to (character id 31)
+    set RS to (character id 30)
+    set emailParts to {}
+    set emailCount to 0
     try
-        set targetAccount to first account whose name is "${args.account.replace(/"/g, '\\"')}"
+        set targetAccount to first account whose name is "${escapedAccount}"
 
         -- Get mailboxes for this account
         set acctMailboxes to every mailbox of targetAccount
@@ -605,7 +633,7 @@ tell application "Mail"
 						? `
         set mailboxesToSearch to {}
         repeat with mb in acctMailboxes
-            if name of mb is "${args.mailbox.replace(/"/g, '\\"')}" then
+            if name of mb is "${escapedMailbox}" then
                 set mailboxesToSearch to {mb}
                 exit repeat
             end if
@@ -616,97 +644,100 @@ tell application "Mail"
 
         -- Search specified mailboxes
         repeat with mb in mailboxesToSearch
+            if emailCount >= ${limit} then exit repeat
             try
+                set mailboxName to name of mb
                 set unreadMessages to (messages of mb whose read status is false)
-                if (count of unreadMessages) > 0 then
-                    set msgLimit to ${args.limit || 10}
-                    if (count of unreadMessages) < msgLimit then
-                        set msgLimit to (count of unreadMessages)
-                    end if
+                set umCount to count of unreadMessages
 
-                    repeat with i from 1 to msgLimit
+                if umCount > 0 then
+                    set idxLimit to umCount
+                    if idxLimit > (${limit} - emailCount) then set idxLimit to (${limit} - emailCount)
+
+                    repeat with i from 1 to idxLimit
                         try
                             set currentMsg to item i of unreadMessages
-                            set msgData to {subject:(subject of currentMsg), sender:(sender of currentMsg), ¬
-                                        date:(date sent of currentMsg) as string, mailbox:(name of mb)}
+                            set emailSubject to subject of currentMsg
+                            set emailSender to sender of currentMsg
+                            set emailDate to (date sent of currentMsg) as string
 
-                            -- Try to get content if possible
+                            set emailMessageId to ""
                             try
-                                set msgContent to content of currentMsg
-                                if length of msgContent > 500 then
-                                    set msgContent to (text 1 thru 500 of msgContent) & "..."
-                                end if
-                                set msgData to msgData & {content:msgContent}
+                                set emailMessageId to message id of currentMsg
                             on error
-                                set msgData to msgData & {content:"[Content not available]"}
+                                set emailMessageId to ""
                             end try
 
-                            set end of resultList to msgData
+                            set emailContent to ""
+                            try
+                                set fullContent to content of currentMsg
+                                if length of fullContent > 500 then
+                                    set emailContent to (text 1 thru 500 of fullContent) & "..."
+                                else
+                                    set emailContent to fullContent
+                                end if
+                            on error
+                                set emailContent to "[Content not available]"
+                            end try
+
+                            set end of emailParts to (emailSubject & FS & emailSender & FS & emailDate & FS & emailContent & FS & "false" & FS & mailboxName & FS & emailMessageId)
+                            set emailCount to emailCount + 1
                         on error
                             -- Skip problematic messages
                         end try
                     end repeat
-
-                    if (count of resultList) ≥ ${args.limit || 10} then exit repeat
                 end if
             on error
                 -- Skip problematic mailboxes
             end try
         end repeat
     on error errMsg
-        return "Error: " & errMsg
+        return "ERROR:" & errMsg
     end try
 
-    return resultList
+    set AppleScript's text item delimiters to RS
+    set resultText to emailParts as string
+    set AppleScript's text item delimiters to ""
+    return resultText
 end tell`;
 
 									try {
-										const asResult = await runAppleScript(script);
-										if (asResult && asResult.startsWith("Error:")) {
+										const asResult = (await runAppleScript(
+											script,
+										)) as string;
+										if (asResult && asResult.startsWith("ERROR:")) {
 											throw new Error(asResult);
 										}
 
-										// Parse the results - similar to general getUnreadMails
-										const emailData = [];
-										const matches = asResult.match(/\{([^}]+)\}/g);
-										if (matches && matches.length > 0) {
-											for (const match of matches) {
-												try {
-													const props = match
-														.substring(1, match.length - 1)
-														.split(",");
-													const email: any = {};
-
-													props.forEach((prop) => {
-														const parts = prop.split(":");
-														if (parts.length >= 2) {
-															const key = parts[0].trim();
-															const value = parts.slice(1).join(":").trim();
-															email[key] = value;
-														}
-													});
-
-													if (email.subject || email.sender) {
-														emailData.push({
-															subject: email.subject || "No subject",
-															sender: email.sender || "Unknown sender",
-															dateSent: email.date || new Date().toString(),
+										emails = asResult
+											? asResult
+													.split(RECORD_SEPARATOR)
+													.filter((record) => record.trim().length > 0)
+													.map((record) => {
+														const [
+															subject,
+															sender,
+															dateSent,
+															content,
+															,
+															mailbox,
+															messageId,
+														] = record.split(FIELD_SEPARATOR);
+														return {
+															subject: subject || "No subject",
+															sender: sender || "Unknown sender",
+															dateSent: dateSent || new Date().toString(),
 															content:
-																email.content || "[Content not available]",
+																content || "[Content not available]",
 															isRead: false,
-															mailbox: `${args.account} - ${email.mailbox || "Unknown"}`,
-														});
-													}
-												} catch (parseError) {
-													console.error(
-														"Error parsing email match:",
-														parseError,
-													);
-												}
-											}
-										}
-
-										emails = emailData;
+															mailbox: `${args.account} - ${mailbox || "Unknown"}`,
+															messageId: messageId || "",
+															messageUrl: messageId
+																? `message://%3c${messageId}%3e`
+																: "",
+														};
+													})
+											: [];
 									} catch (error) {
 										console.error(
 											"Error getting account-specific emails:",
@@ -728,10 +759,7 @@ end tell`;
 												emails.length > 0
 													? `Found ${emails.length} unread email(s)${args.account ? ` in account "${args.account}"` : ""}${args.mailbox ? ` and mailbox "${args.mailbox}"` : ""}:\n\n` +
 														emails
-															.map(
-																(email: any) =>
-																	`[${email.dateSent}] From: ${email.sender}\nMailbox: ${email.mailbox}\nSubject: ${email.subject}\n${email.content.substring(0, 500)}${email.content.length > 500 ? "..." : ""}`,
-															)
+															.map((email: any) => formatEmailForDisplay(email, 500))
 															.join("\n\n")
 													: `No unread emails found${args.account ? ` in account "${args.account}"` : ""}${args.mailbox ? ` and mailbox "${args.mailbox}"` : ""}`,
 										},
@@ -761,10 +789,7 @@ end tell`;
 												emails.length > 0
 													? `Found ${emails.length} email(s) for "${args.searchTerm}"${args.account ? ` in account "${args.account}"` : ""}${args.mailbox ? ` and mailbox "${args.mailbox}"` : ""}:\n\n` +
 														emails
-															.map(
-																(email: any) =>
-																	`[${email.dateSent}] From: ${email.sender}\nMailbox: ${email.mailbox}\nSubject: ${email.subject}\n${email.content.substring(0, 200)}${email.content.length > 200 ? "..." : ""}`,
-															)
+															.map((email: any) => formatEmailForDisplay(email, 200))
 															.join("\n\n")
 													: `No emails found for "${args.searchTerm}"${args.account ? ` in account "${args.account}"` : ""}${args.mailbox ? ` and mailbox "${args.mailbox}"` : ""}`,
 										},
@@ -865,10 +890,7 @@ end tell`;
 												emails.length > 0
 													? `Found ${emails.length} latest email(s) in account "${account}":\n\n` +
 														emails
-															.map(
-																(email: any) =>
-																	`[${email.dateSent}] From: ${email.sender}\nMailbox: ${email.mailbox}\nSubject: ${email.subject}\n${email.content.substring(0, 500)}${email.content.length > 500 ? "..." : ""}`,
-															)
+															.map((email: any) => formatEmailForDisplay(email, 500))
 															.join("\n\n")
 													: `No latest emails found in account "${account}"`,
 										},

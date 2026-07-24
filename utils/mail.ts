@@ -19,6 +19,98 @@ interface EmailMessage {
 	content: string;
 	isRead: boolean;
 	mailbox: string;
+	// The raw RFC 822 Message-ID header value (no angle brackets), e.g.
+	// "abc123@mail.example.com".
+	messageId: string;
+	// A "message://" URL that opens this exact email in Mail.app, e.g.
+	// "message://%3cabc123@mail.example.com%3e". Empty string if the
+	// message id could not be determined.
+	messageUrl: string;
+}
+
+// Non-printable delimiters used to safely encode multi-field AppleScript
+// results as a single string. These are extremely unlikely to appear in
+// email subjects/senders/dates/content, unlike commas or braces, which
+// naive parsing previously broke on (e.g. AppleScript dates contain commas).
+const FIELD_SEPARATOR = "\u001F"; // ASCII Unit Separator
+const RECORD_SEPARATOR = "\u001E"; // ASCII Record Separator
+
+/**
+ * Parse a FIELD_SEPARATOR/RECORD_SEPARATOR encoded string (produced by the
+ * AppleScript snippets below) into EmailMessage objects.
+ */
+/**
+ * Parse a RECORD_SEPARATOR-joined string (produced below) into a string[].
+ * Note: `runAppleScript` (from the `run-applescript` package) always resolves
+ * to a plain string - it never converts AppleScript lists into real JS
+ * arrays - so any code doing `Array.isArray(result)` on its return value is
+ * dead code that always falls through to the empty-array branch.
+ */
+function parseDelimitedList(raw: string | undefined | null): string[] {
+	if (!raw) return [];
+	return raw
+		.split(RECORD_SEPARATOR)
+		.map((item) => item.trim())
+		.filter((item) => item.length > 0);
+}
+
+/**
+ * Build a "message://" URL that opens a specific email in Mail.app, given
+ * its raw Message-ID header value (no angle brackets). Mail.app expects the
+ * Message-ID wrapped in URL-encoded angle brackets: %3c...%3e.
+ */
+function buildMessageUrl(messageId: string): string {
+	if (!messageId) return "";
+	return `message://%3c${messageId}%3e`;
+}
+
+function parseDelimitedEmails(raw: string | undefined | null): EmailMessage[] {
+	if (!raw) return [];
+
+	return raw
+		.split(RECORD_SEPARATOR)
+		.filter((record) => record.trim().length > 0)
+		.map((record) => {
+			const [subject, sender, dateSent, content, isReadStr, mailbox, messageId] =
+				record.split(FIELD_SEPARATOR);
+			return {
+				subject: subject || "No subject",
+				sender: sender || "Unknown sender",
+				dateSent: dateSent || "",
+				content: content || "[Content not available]",
+				isRead: isReadStr === "true",
+				mailbox: mailbox || "Unknown",
+				messageId: messageId || "",
+				messageUrl: buildMessageUrl(messageId || ""),
+			};
+		});
+}
+
+/**
+ * Build an AppleScript snippet that populates `targetMailboxes` with either
+ * every mailbox (when no account filter is given) or only the mailboxes
+ * belonging to the named accounts.
+ */
+function buildAccountFilterClause(accountNames?: string[]): string {
+	if (!accountNames || accountNames.length === 0) {
+		return "    set targetMailboxes to mailboxes";
+	}
+
+	const quotedNames = accountNames
+		.map((name) => `"${escapeAppleScript(name)}"`)
+		.join(", ");
+
+	return `    repeat with acctName in {${quotedNames}}
+        try
+            set targetAccount to first account whose name is acctName
+            set acctMailboxes to every mailbox of targetAccount
+            repeat with mb in acctMailboxes
+                set end of targetMailboxes to mb
+            end repeat
+        on error
+            -- Account not found, skip
+        end try
+    end repeat`;
 }
 
 /**
@@ -81,44 +173,53 @@ async function getUnreadMails(limit = 10, accountNames?: string[]): Promise<Emai
 		}
 
 		const maxEmails = Math.min(limit, CONFIG.MAX_EMAILS);
+		const accountFilterClause = buildAccountFilterClause(accountNames);
 
 		const script = `
 tell application "Mail"
-    set emailList to {}
+    set FS to (character id 31)
+    set RS to (character id 30)
+    set emailParts to {}
     set emailCount to 0
+    set targetMailboxes to {}
 
-    -- Get mailboxes (limited to avoid performance issues)
-    set allMailboxes to mailboxes
+${accountFilterClause}
 
-    repeat with i from 1 to (count of allMailboxes)
+    repeat with currentMailbox in targetMailboxes
         if emailCount >= ${maxEmails} then exit repeat
 
         try
-            set currentMailbox to item i of allMailboxes
             set mailboxName to name of currentMailbox
 
-            -- Get unread messages from this mailbox
-            set unreadMessages to messages of currentMailbox
+            -- Filter to unread messages directly in AppleScript (much faster
+            -- than fetching every message and checking read status in a loop)
+            set unreadMessages to (messages of currentMailbox whose read status is false)
+            set umCount to count of unreadMessages
 
-            repeat with j from 1 to (count of unreadMessages)
-                if emailCount >= ${maxEmails} then exit repeat
+            if umCount > 0 then
+                set idxLimit to umCount
+                if idxLimit > (${maxEmails} - emailCount) then set idxLimit to (${maxEmails} - emailCount)
 
-                try
-                    set currentMsg to item j of unreadMessages
-
-                    -- Only process unread messages
-                    if read status of currentMsg is false then
+                repeat with j from 1 to idxLimit
+                    try
+                        set currentMsg to item j of unreadMessages
                         set emailSubject to subject of currentMsg
                         set emailSender to sender of currentMsg
                         set emailDate to (date sent of currentMsg) as string
+
+                        set emailMessageId to ""
+                        try
+                            set emailMessageId to message id of currentMsg
+                        on error
+                            set emailMessageId to ""
+                        end try
 
                         -- Get content with length limit
                         set emailContent to ""
                         try
                             set fullContent to content of currentMsg
                             if (length of fullContent) > ${CONFIG.MAX_CONTENT_PREVIEW} then
-                                set emailContent to (characters 1 thru ${CONFIG.MAX_CONTENT_PREVIEW} of fullContent) as string
-                                set emailContent to emailContent & "..."
+                                set emailContent to (text 1 thru ${CONFIG.MAX_CONTENT_PREVIEW} of fullContent) & "..."
                             else
                                 set emailContent to fullContent
                             end if
@@ -126,31 +227,26 @@ tell application "Mail"
                             set emailContent to "[Content not available]"
                         end try
 
-                        set emailInfo to {subject:emailSubject, sender:emailSender, dateSent:emailDate, content:emailContent, isRead:false, mailbox:mailboxName}
-                        set emailList to emailList & {emailInfo}
+                        set end of emailParts to (emailSubject & FS & emailSender & FS & emailDate & FS & emailContent & FS & "false" & FS & mailboxName & FS & emailMessageId)
                         set emailCount to emailCount + 1
-                    end if
-                on error
-                    -- Skip problematic messages
-                end try
-            end repeat
+                    on error
+                        -- Skip problematic messages
+                    end try
+                end repeat
+            end if
         on error
             -- Skip problematic mailboxes
         end try
     end repeat
 
-    return "SUCCESS:" & (count of emailList)
+    set AppleScript's text item delimiters to RS
+    set resultText to emailParts as string
+    set AppleScript's text item delimiters to ""
+    return resultText
 end tell`;
 
 		const result = (await runAppleScript(script)) as string;
-
-		if (result && result.startsWith("SUCCESS:")) {
-			// For now, return empty array as the actual email parsing from AppleScript is complex
-			// The key improvement is that we're not timing out anymore
-			return [];
-		}
-
-		return [];
+		return parseDelimitedEmails(result);
 	} catch (error) {
 		console.error(
 			`Error getting unread emails: ${error instanceof Error ? error.message : String(error)}`,
@@ -185,46 +281,55 @@ async function searchMails(
 		const maxEmails = Math.min(limit, CONFIG.MAX_EMAILS);
 		const cleanSearchTerm = searchTerm.toLowerCase();
 		const escapedSearchTerm = escapeAppleScript(cleanSearchTerm);
+		const accountFilterClause = buildAccountFilterClause(accountNames);
 
 		const script = `
 tell application "Mail"
-    set emailList to {}
+    set FS to (character id 31)
+    set RS to (character id 30)
+    set emailParts to {}
     set emailCount to 0
     set searchTerm to "${escapedSearchTerm}"
+    set targetMailboxes to {}
 
-    -- Get mailboxes (limited to avoid performance issues)
-    set allMailboxes to mailboxes
+${accountFilterClause}
 
-    repeat with i from 1 to (count of allMailboxes)
+    repeat with currentMailbox in targetMailboxes
         if emailCount >= ${maxEmails} then exit repeat
 
         try
-            set currentMailbox to item i of allMailboxes
             set mailboxName to name of currentMailbox
 
-            -- Get messages from this mailbox
-            set allMessages to messages of currentMailbox
+            -- Filter matching messages directly in AppleScript (much faster
+            -- than fetching every message and checking the subject in a loop)
+            set matchingMessages to (messages of currentMailbox whose subject contains searchTerm)
+            set mmCount to count of matchingMessages
 
-            repeat with j from 1 to (count of allMessages)
-                if emailCount >= ${maxEmails} then exit repeat
+            if mmCount > 0 then
+                set idxLimit to mmCount
+                if idxLimit > (${maxEmails} - emailCount) then set idxLimit to (${maxEmails} - emailCount)
 
-                try
-                    set currentMsg to item j of allMessages
-                    set emailSubject to subject of currentMsg
-
-                    -- Simple case-insensitive search in subject
-                    if emailSubject contains searchTerm then
+                repeat with j from 1 to idxLimit
+                    try
+                        set currentMsg to item j of matchingMessages
+                        set emailSubject to subject of currentMsg
                         set emailSender to sender of currentMsg
                         set emailDate to (date sent of currentMsg) as string
-                        set emailRead to read status of currentMsg
+                        set emailRead to (read status of currentMsg) as string
+
+                        set emailMessageId to ""
+                        try
+                            set emailMessageId to message id of currentMsg
+                        on error
+                            set emailMessageId to ""
+                        end try
 
                         -- Get content with length limit
                         set emailContent to ""
                         try
                             set fullContent to content of currentMsg
                             if (length of fullContent) > ${CONFIG.MAX_CONTENT_PREVIEW} then
-                                set emailContent to (characters 1 thru ${CONFIG.MAX_CONTENT_PREVIEW} of fullContent) as string
-                                set emailContent to emailContent & "..."
+                                set emailContent to (text 1 thru ${CONFIG.MAX_CONTENT_PREVIEW} of fullContent) & "..."
                             else
                                 set emailContent to fullContent
                             end if
@@ -232,31 +337,26 @@ tell application "Mail"
                             set emailContent to "[Content not available]"
                         end try
 
-                        set emailInfo to {subject:emailSubject, sender:emailSender, dateSent:emailDate, content:emailContent, isRead:emailRead, mailbox:mailboxName}
-                        set emailList to emailList & {emailInfo}
+                        set end of emailParts to (emailSubject & FS & emailSender & FS & emailDate & FS & emailContent & FS & emailRead & FS & mailboxName & FS & emailMessageId)
                         set emailCount to emailCount + 1
-                    end if
-                on error
-                    -- Skip problematic messages
-                end try
-            end repeat
+                    on error
+                        -- Skip problematic messages
+                    end try
+                end repeat
+            end if
         on error
             -- Skip problematic mailboxes
         end try
     end repeat
 
-    return "SUCCESS:" & (count of emailList)
+    set AppleScript's text item delimiters to RS
+    set resultText to emailParts as string
+    set AppleScript's text item delimiters to ""
+    return resultText
 end tell`;
 
 		const result = (await runAppleScript(script)) as string;
-
-		if (result && result.startsWith("SUCCESS:")) {
-			// For now, return empty array as the actual email parsing from AppleScript is complex
-			// The key improvement is that we're not timing out anymore
-			return [];
-		}
-
-		return [];
+		return parseDelimitedEmails(result);
 	} catch (error) {
 		console.error(
 			`Error searching emails: ${error instanceof Error ? error.message : String(error)}`,
@@ -379,26 +479,20 @@ async function getMailboxes(): Promise<string[]> {
 
 		const script = `
 tell application "Mail"
+    set RS to (character id 30)
     try
-        -- Simple check - try to get just the count first
-        set mailboxCount to count of mailboxes
-        if mailboxCount > 0 then
-            return {"Inbox", "Sent", "Drafts"}
-        else
-            return {}
-        end if
+        set boxNames to name of every mailbox
+        set AppleScript's text item delimiters to RS
+        set resultText to boxNames as string
+        set AppleScript's text item delimiters to ""
+        return resultText
     on error
-        return {}
+        return ""
     end try
 end tell`;
 
-		const result = (await runAppleScript(script)) as unknown;
-
-		if (Array.isArray(result)) {
-			return result.filter((name) => name && typeof name === "string");
-		}
-
-		return [];
+		const result = (await runAppleScript(script)) as string;
+		return parseDelimitedList(result);
 	} catch (error) {
 		console.error(
 			`Error getting mailboxes: ${error instanceof Error ? error.message : String(error)}`,
@@ -419,26 +513,20 @@ async function getAccounts(): Promise<string[]> {
 
 		const script = `
 tell application "Mail"
+    set RS to (character id 30)
     try
-        -- Simple check - try to get just the count first
-        set accountCount to count of accounts
-        if accountCount > 0 then
-            return {"Default Account"}
-        else
-            return {}
-        end if
+        set acctNames to name of every account
+        set AppleScript's text item delimiters to RS
+        set resultText to acctNames as string
+        set AppleScript's text item delimiters to ""
+        return resultText
     on error
-        return {}
+        return ""
     end try
 end tell`;
 
-		const result = (await runAppleScript(script)) as unknown;
-
-		if (Array.isArray(result)) {
-			return result.filter((name) => name && typeof name === "string");
-		}
-
-		return [];
+		const result = (await runAppleScript(script)) as string;
+		return parseDelimitedList(result);
 	} catch (error) {
 		console.error(
 			`Error getting accounts: ${error instanceof Error ? error.message : String(error)}`,
@@ -461,39 +549,40 @@ async function getMailboxesForAccount(accountName: string): Promise<string[]> {
 			return [];
 		}
 
+		const escapedAccountName = escapeAppleScript(accountName);
+
 		const script = `
 tell application "Mail"
+    set RS to (character id 30)
     set boxList to {}
 
     try
         -- Find the account
-        set targetAccount to first account whose name is "${accountName.replace(/"/g, '\\"')}"
+        set targetAccount to first account whose name is "${escapedAccountName}"
         set accountMailboxes to mailboxes of targetAccount
 
         repeat with i from 1 to (count of accountMailboxes)
             try
                 set currentMailbox to item i of accountMailboxes
                 set mailboxName to name of currentMailbox
-                set boxList to boxList & {mailboxName}
+                set end of boxList to mailboxName
             on error
                 -- Skip problematic mailboxes
             end try
         end repeat
     on error
         -- Account not found or other error
-        return {}
+        return ""
     end try
 
-    return boxList
+    set AppleScript's text item delimiters to RS
+    set resultText to boxList as string
+    set AppleScript's text item delimiters to ""
+    return resultText
 end tell`;
 
-		const result = (await runAppleScript(script)) as unknown;
-
-		if (Array.isArray(result)) {
-			return result.filter((name) => name && typeof name === "string");
-		}
-
-		return [];
+		const result = (await runAppleScript(script)) as string;
+		return parseDelimitedList(result);
 	} catch (error) {
 		console.error(
 			`Error getting mailboxes for account: ${error instanceof Error ? error.message : String(error)}`,
@@ -515,97 +604,103 @@ async function getLatestMails(
 			throw new Error(accessResult.message);
 		}
 
+		const escapedAccount = escapeAppleScript(account);
+
 		const script = `
 tell application "Mail"
-    set resultList to {}
+    set FS to (character id 31)
+    set RS to (character id 30)
+    set emailParts to {}
+    set emailCount to 0
     try
-        set targetAccount to first account whose name is "${account.replace(/"/g, '\\"')}"
+        set targetAccount to first account whose name is "${escapedAccount}"
         set acctMailboxes to every mailbox of targetAccount
 
+        -- Prioritize the Inbox first so "latest" reflects what the user
+        -- actually sees in their inbox, rather than whatever mailbox happens
+        -- to be first in the account's mailbox list (e.g. Gmail accounts
+        -- often list "All Mail"/"Important" before "INBOX").
+        set orderedMailboxes to {}
+        set inboxMailboxes to {}
         repeat with mb in acctMailboxes
+            if (name of mb is "INBOX") or (name of mb is "Inbox") then
+                set end of inboxMailboxes to mb
+            else
+                set end of orderedMailboxes to mb
+            end if
+        end repeat
+        set orderedMailboxes to inboxMailboxes & orderedMailboxes
+
+        repeat with mb in orderedMailboxes
+            if emailCount >= ${limit} then exit repeat
             try
-                set messagesList to (messages of mb)
-                -- Messages are already in reverse chronological order (newest first)
-                -- We just need to limit the count
-                set msgLimit to ${limit}
-                if (count of messagesList) < msgLimit then
-                    set msgLimit to (count of messagesList)
-                end if
+                set mailboxName to name of mb
+                set msgCount to count of messages of mb
+                if msgCount > 0 then
+                    set idxLimit to msgCount
+                    if idxLimit > (${limit} - emailCount) then set idxLimit to (${limit} - emailCount)
 
-                repeat with i from 1 to msgLimit
-                    try
-                        set currentMsg to item i of messagesList
-                        set msgData to {subject:(subject of currentMsg), sender:(sender of currentMsg), ¬
-                                    date:(date sent of currentMsg) as string, mailbox:(name of mb)}
-
+                    -- Messages are already newest-first. Access by index
+                    -- directly (rather than materializing the full message
+                    -- list) to avoid timeouts on very large mailboxes.
+                    repeat with i from 1 to idxLimit
                         try
-                            set msgContent to content of currentMsg
-                            if length of msgContent > 500 then
-                                set msgContent to (text 1 thru 500 of msgContent) & "..."
-                            end if
-                            set msgData to msgData & {content:msgContent}
+                            set currentMsg to message i of mb
+                            set emailSubject to subject of currentMsg
+                            set emailSender to sender of currentMsg
+                            set emailDate to (date sent of currentMsg) as string
+                            set emailRead to (read status of currentMsg) as string
+
+                            set emailMessageId to ""
+                            try
+                                set emailMessageId to message id of currentMsg
+                            on error
+                                set emailMessageId to ""
+                            end try
+
+                            set emailContent to ""
+                            try
+                                set fullContent to content of currentMsg
+                                if (length of fullContent) > 500 then
+                                    set emailContent to (text 1 thru 500 of fullContent) & "..."
+                                else
+                                    set emailContent to fullContent
+                                end if
+                            on error
+                                set emailContent to "[Content not available]"
+                            end try
+
+                            set end of emailParts to (emailSubject & FS & emailSender & FS & emailDate & FS & emailContent & FS & emailRead & FS & mailboxName & FS & emailMessageId)
+                            set emailCount to emailCount + 1
                         on error
-                            set msgData to msgData & {content:"[Content not available]"}
+                            -- Skip problematic messages
                         end try
-
-                        set end of resultList to msgData
-                    on error
-                        -- Skip problematic messages
-                    end try
-                end repeat
-
-                if (count of resultList) ≥ ${limit} then exit repeat
+                    end repeat
+                end if
             on error
                 -- Skip problematic mailboxes
             end try
         end repeat
     on error errMsg
-        return "Error: " & errMsg
+        return "ERROR:" & errMsg
     end try
 
-    return resultList
+    set AppleScript's text item delimiters to RS
+    set resultText to emailParts as string
+    set AppleScript's text item delimiters to ""
+    return resultText
 end tell`;
 
-		const asResult = await runAppleScript(script);
+		const asResult = (await runAppleScript(script)) as string;
 
-		if (asResult && asResult.startsWith("Error:")) {
+		if (asResult && asResult.startsWith("ERROR:")) {
 			throw new Error(asResult);
 		}
 
-		const emailData = [];
-		const matches = asResult.match(/\{([^}]+)\}/g);
-		if (matches && matches.length > 0) {
-			for (const match of matches) {
-				try {
-					const props = match.substring(1, match.length - 1).split(",");
-					const email: any = {};
-
-					props.forEach((prop) => {
-						const parts = prop.split(":");
-						if (parts.length >= 2) {
-							const key = parts[0].trim();
-							const value = parts.slice(1).join(":").trim();
-							email[key] = value;
-						}
-					});
-
-					if (email.subject || email.sender) {
-						emailData.push({
-							subject: email.subject || "No subject",
-							sender: email.sender || "Unknown sender",
-							dateSent: email.date || new Date().toString(),
-							content: email.content || "[Content not available]",
-							isRead: false,
-							mailbox: `${account} - ${email.mailbox || "Unknown"}`,
-						});
-					}
-				} catch (parseError) {
-					console.error("Error parsing email match:", parseError);
-				}
-			}
-		}
-
-		return emailData;
+		return parseDelimitedEmails(asResult).map((email) => ({
+			...email,
+			mailbox: `${account} - ${email.mailbox}`,
+		}));
 	} catch (error) {
 		console.error("Error getting latest emails:", error);
 		return [];

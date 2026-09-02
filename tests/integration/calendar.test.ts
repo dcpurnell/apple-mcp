@@ -1,371 +1,276 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, afterAll } from "bun:test";
 import { TEST_DATA } from "../fixtures/test-data.js";
-import { assertNotEmpty, assertValidDate, sleep } from "../helpers/test-utils.js";
+import { assertValidDate } from "../helpers/test-utils.js";
 import * as calendarModule from "../../utils/calendar-python.js";
 
 describe("Calendar Integration Tests", () => {
+  describe("requestCalendarAccess", () => {
+    it("should report calendar access", async () => {
+      const result = await calendarModule.requestCalendarAccess();
+
+      expect(typeof result.hasAccess).toBe("boolean");
+      expect(typeof result.message).toBe("string");
+      console.log(`Calendar access: ${result.hasAccess} (${result.message})`);
+    }, 15000);
+  });
+
+  describe("getCalendarList", () => {
+    it("should retrieve the available calendars", async () => {
+      const calendars = await calendarModule.getCalendarList();
+
+      expect(Array.isArray(calendars)).toBe(true);
+      console.log(`Found ${calendars.length} calendars`);
+
+      if (calendars.length === 0) {
+        // Everything downstream passes vacuously in this state, so say so loudly.
+        console.warn(
+          "⚠️ No calendars returned. calendar-eventkit.py reports access as " +
+            "granted when EventKit status is NotDetermined without actually " +
+            "requesting it, so the rest of this suite is not exercising anything.",
+        );
+      }
+
+      for (const calendar of calendars) {
+        expect(typeof calendar.name).toBe("string");
+        expect(typeof calendar.type).toBe("string");
+        console.log(`  - "${calendar.name}" (${calendar.type})`);
+      }
+    }, 15000);
+  });
+
   describe("getEvents", () => {
-    it("should retrieve calendar events for next week", async () => {
-      const events = await calendarModule.getEvents(10);
-      
+    it("should retrieve events in the default window", async () => {
+      const events = await calendarModule.getEvents();
+
       expect(Array.isArray(events)).toBe(true);
-      console.log(`Found ${events.length} events in the next 7 days`);
-      
-      if (events.length > 0) {
-        for (const event of events) {
-          expect(typeof event.title).toBe("string");
-          expect(typeof event.calendarName).toBe("string");
-          expect(event.title.length).toBeGreaterThan(0);
-          
-          if (event.startDate) {
-            assertValidDate(event.startDate);
-          }
-          if (event.endDate) {
-            assertValidDate(event.endDate);
-          }
-          
-          console.log(`  - "${event.title}" (${event.calendarName})`);
-          if (event.startDate && event.endDate) {
-            const startDate = new Date(event.startDate);
-            const endDate = new Date(event.endDate);
-            console.log(`    ${startDate.toLocaleString()} - ${endDate.toLocaleString()}`);
-          }
-          if (event.location) {
-            console.log(`    Location: ${event.location}`);
-          }
-        }
-      } else {
-        console.log("ℹ️ No upcoming events found - this is normal");
+      console.log(`Found ${events.length} events in the default 21-day window`);
+
+      for (const event of events) {
+        expect(typeof event.title).toBe("string");
+        expect(typeof event.calendarName).toBe("string");
+        assertValidDate(event.startDate);
+        assertValidDate(event.endDate);
+      }
+
+      for (const event of events.slice(0, 5)) {
+        console.log(`  - "${event.title}" (${event.calendarName})`);
       }
     }, 20000);
 
-    it("should retrieve events with custom date range", async () => {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(0, 0, 0, 0);
-      
-      const nextWeek = new Date(tomorrow);
-      nextWeek.setDate(tomorrow.getDate() + 7);
-      nextWeek.setHours(23, 59, 59, 999);
-      
-      const events = await calendarModule.getEvents(
-        20,
-        tomorrow.toISOString(),
-        nextWeek.toISOString()
-      );
-      
-      expect(Array.isArray(events)).toBe(true);
-      console.log(`Found ${events.length} events between ${tomorrow.toLocaleDateString()} and ${nextWeek.toLocaleDateString()}`);
-      
-      // Verify events are within the date range
-      if (events.length > 0) {
-        for (const event of events) {
-          if (event.startDate) {
-            const eventDate = new Date(event.startDate);
-            expect(eventDate.getTime()).toBeGreaterThanOrEqual(tomorrow.getTime());
-            expect(eventDate.getTime()).toBeLessThanOrEqual(nextWeek.getTime());
-          }
-        }
-        console.log("✅ All events are within the specified date range");
-      }
-    }, 15000);
-
     it("should limit event count correctly", async () => {
       const limit = 3;
-      const events = await calendarModule.getEvents(limit);
-      
+      const events = await calendarModule.getEvents(undefined, 7, 14, limit);
+
       expect(Array.isArray(events)).toBe(true);
       expect(events.length).toBeLessThanOrEqual(limit);
       console.log(`Requested ${limit} events, got ${events.length}`);
     }, 15000);
-  });
 
-  describe("createEvent", () => {
-    it("should create a basic calendar event", async () => {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(14, 0, 0, 0); // 2 PM tomorrow
-      
-      const eventEndTime = new Date(tomorrow);
-      eventEndTime.setHours(15, 0, 0, 0); // 3 PM tomorrow
-      
-      const testEventTitle = `${TEST_DATA.CALENDAR.testEvent.title} ${Date.now()}`;
-      
-      const result = await calendarModule.createEvent(
-        testEventTitle,
-        tomorrow.toISOString(),
-        eventEndTime.toISOString(),
-        TEST_DATA.CALENDAR.testEvent.location,
-        TEST_DATA.CALENDAR.testEvent.notes
-      );
-      
-      expect(result.success).toBe(true);
-      expect(result.eventId).toBeTruthy();
-      
-      console.log(`✅ Created event: "${testEventTitle}"`);
-      console.log(`  Event ID: ${result.eventId}`);
-      console.log(`  Time: ${tomorrow.toLocaleString()} - ${eventEndTime.toLocaleString()}`);
-    }, 15000);
+    it("should return events only from the requested calendars", async () => {
+      const calendars = await calendarModule.getCalendarList();
 
-    it("should create an all-day event", async () => {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 2);
-      tomorrow.setHours(0, 0, 0, 0);
-      
-      const eventEnd = new Date(tomorrow);
-      eventEnd.setHours(23, 59, 59, 999);
-      
-      const allDayEventTitle = `All Day Test Event ${Date.now()}`;
-      
-      const result = await calendarModule.createEvent(
-        allDayEventTitle,
-        tomorrow.toISOString(),
-        eventEnd.toISOString(),
-        "All Day Location",
-        "This is an all-day event",
-        true // isAllDay
-      );
-      
-      expect(result.success).toBe(true);
-      expect(result.eventId).toBeTruthy();
-      
-      console.log(`✅ Created all-day event: "${allDayEventTitle}"`);
-      console.log(`  Event ID: ${result.eventId}`);
-    }, 15000);
-
-    it("should create event in specific calendar if specified", async () => {
-      const eventTime = new Date();
-      eventTime.setDate(eventTime.getDate() + 3);
-      eventTime.setHours(16, 0, 0, 0);
-      
-      const eventEndTime = new Date(eventTime);
-      eventEndTime.setHours(17, 0, 0, 0);
-      
-      const specificCalendarEvent = `Specific Calendar Event ${Date.now()}`;
-      
-      const result = await calendarModule.createEvent(
-        specificCalendarEvent,
-        eventTime.toISOString(),
-        eventEndTime.toISOString(),
-        "Test Location",
-        "Event in specific calendar",
-        false,
-        TEST_DATA.CALENDAR.calendarName
-      );
-      
-      if (result.success) {
-        console.log(`✅ Created event in specific calendar: "${specificCalendarEvent}"`);
-      } else {
-        console.log(`ℹ️ Could not create in specific calendar (${result.message}), but this is expected if the calendar doesn't exist`);
+      if (calendars.length === 0) {
+        console.log("ℹ️ No calendars available - skipping");
+        return;
       }
-    }, 15000);
+
+      const target = calendars[0].name;
+      const events = await calendarModule.getEvents([target], 30, 30, 50);
+
+      expect(Array.isArray(events)).toBe(true);
+      for (const event of events) {
+        expect(event.calendarName).toBe(target);
+      }
+      console.log(`✅ ${events.length} events, all from "${target}"`);
+    }, 20000);
+
+    it("should honor the date range window", async () => {
+      const daysBack = 3;
+      const daysForward = 3;
+      const events = await calendarModule.getEvents(
+        undefined,
+        daysBack,
+        daysForward,
+        100,
+      );
+
+      expect(Array.isArray(events)).toBe(true);
+
+      // Allow a day of slack for all-day events and timezone edges
+      const lowerBound = Date.now() - (daysBack + 1) * 24 * 60 * 60 * 1000;
+      const upperBound = Date.now() + (daysForward + 1) * 24 * 60 * 60 * 1000;
+
+      for (const event of events) {
+        const start = new Date(event.startDate).getTime();
+        expect(start).toBeGreaterThanOrEqual(lowerBound);
+        expect(start).toBeLessThanOrEqual(upperBound);
+      }
+      console.log(`✅ All ${events.length} events fall inside the ±3 day window`);
+    }, 20000);
   });
 
   describe("searchEvents", () => {
-    it("should search for events by title", async () => {
-      // First create a searchable event
-      const searchEventTime = new Date();
-      searchEventTime.setDate(searchEventTime.getDate() + 4);
-      searchEventTime.setHours(10, 0, 0, 0);
-      
-      const searchEventEndTime = new Date(searchEventTime);
-      searchEventEndTime.setHours(11, 0, 0, 0);
-      
-      const searchableEventTitle = `Searchable Test Event ${Date.now()}`;
-      
-      await calendarModule.createEvent(
-        searchableEventTitle,
-        searchEventTime.toISOString(),
-        searchEventEndTime.toISOString(),
-        "Search Test Location",
-        "This event is for search testing"
-      );
-      
-      await sleep(3000); // Wait for event to be indexed
-      
-      // Now search for it
-      const searchResults = await calendarModule.searchEvents("Searchable Test", 10);
-      
-      expect(Array.isArray(searchResults)).toBe(true);
-      
-      if (searchResults.length > 0) {
-        console.log(`✅ Found ${searchResults.length} events matching "Searchable Test"`);
-        
-        const matchingEvent = searchResults.find(event => 
-          event.title.includes("Searchable Test")
-        );
-        
-        if (matchingEvent) {
-          console.log(`  - "${matchingEvent.title}"`);
-          console.log(`    Calendar: ${matchingEvent.calendarName}`);
-          console.log(`    ID: ${matchingEvent.id}`);
-        }
-      } else {
-        console.log("ℹ️ No events found for 'Searchable Test' - may need time for indexing");
-      }
-    }, 25000);
+    it("should search events by text", async () => {
+      const results = await calendarModule.searchEvents("meeting", undefined, 30, 30, 10);
 
-    it("should search events with date range", async () => {
-      const nextMonth = new Date();
-      nextMonth.setMonth(nextMonth.getMonth() + 1);
-      
-      const monthAfterNext = new Date(nextMonth);
-      monthAfterNext.setMonth(monthAfterNext.getMonth() + 1);
-      
-      const searchResults = await calendarModule.searchEvents(
-        "meeting",
-        5,
-        nextMonth.toISOString(),
-        monthAfterNext.toISOString()
-      );
-      
-      expect(Array.isArray(searchResults)).toBe(true);
-      console.log(`Found ${searchResults.length} "meeting" events in future date range`);
-      
-      if (searchResults.length > 0) {
-        for (const event of searchResults.slice(0, 3)) {
-          console.log(`  - "${event.title}" (${event.calendarName})`);
-        }
+      expect(Array.isArray(results)).toBe(true);
+      console.log(`Found ${results.length} events matching "meeting"`);
+
+      for (const event of results) {
+        const haystack = [event.title, event.location ?? "", event.notes ?? ""]
+          .join(" ")
+          .toLowerCase();
+        expect(haystack).toContain("meeting");
       }
     }, 20000);
 
     it("should handle search with no results", async () => {
-      const searchResults = await calendarModule.searchEvents("VeryUniqueEventTitle12345", 5);
-      
-      expect(Array.isArray(searchResults)).toBe(true);
-      expect(searchResults.length).toBe(0);
-      
+      const results = await calendarModule.searchEvents("VeryUniqueEventTitle12345");
+
+      expect(Array.isArray(results)).toBe(true);
+      expect(results.length).toBe(0);
       console.log("✅ Handled search with no results correctly");
+    }, 15000);
+
+    it("should reject an empty search text", async () => {
+      let thrown: unknown;
+      try {
+        await calendarModule.searchEvents("");
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown instanceof Error).toBe(true);
+      console.log("✅ Empty search text correctly rejected");
+    }, 10000);
+  });
+
+  describe("createEvent", () => {
+    // Events are created in a fixture calendar and removed in afterAll.
+    const createdIds: string[] = [];
+
+    afterAll(async () => {
+      for (const id of createdIds) {
+        try {
+          await calendarModule.deleteEvent(id);
+        } catch (error) {
+          console.warn(`Could not delete test event ${id}:`, error);
+        }
+      }
+      console.log(`Cleaned up ${createdIds.length} test event(s)`);
+    });
+
+    it("should create an event and read it back", async () => {
+      const start = new Date();
+      start.setDate(start.getDate() + 1);
+      start.setHours(14, 0, 0, 0);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+
+      const title = `${TEST_DATA.CALENDAR.testEvent.title} ${Date.now()}`;
+      const result = await calendarModule.createEvent(
+        "",
+        title,
+        start,
+        end,
+        TEST_DATA.CALENDAR.testEvent.location,
+        TEST_DATA.CALENDAR.testEvent.notes,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.event).toBeTruthy();
+      expect(result.event!.title).toBe(title);
+      expect(result.event!.location).toBe(TEST_DATA.CALENDAR.testEvent.location);
+      expect(result.event!.id.length).toBeGreaterThan(0);
+
+      createdIds.push(result.event!.id);
+      console.log(`✅ Created "${title}" in "${result.event!.calendarName}"`);
+
+      // The event must be findable by search, not just returned by create
+      const found = await calendarModule.searchEvents(title, undefined, 1, 3, 10);
+      expect(found.some((e) => e.title === title)).toBe(true);
+      console.log("✅ Created event is retrievable via searchEvents");
+    }, 20000);
+
+    it("should create an all-day event", async () => {
+      const start = new Date();
+      start.setDate(start.getDate() + 2);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+      const title = `All Day Test Event ${Date.now()}`;
+      const result = await calendarModule.createEvent(
+        "",
+        title,
+        start,
+        end,
+        undefined,
+        undefined,
+        true,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.event!.isAllDay).toBe(true);
+
+      createdIds.push(result.event!.id);
+      console.log(`✅ Created all-day event: "${title}"`);
+    }, 20000);
+
+    it("should reject an end date before the start date", async () => {
+      const start = new Date();
+      start.setDate(start.getDate() + 1);
+      start.setHours(15, 0, 0, 0);
+      const end = new Date(start.getTime() - 60 * 60 * 1000);
+
+      const result = await calendarModule.createEvent("", "Invalid Range", start, end);
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("after its start date");
+      console.log("✅ Invalid time range correctly rejected");
+    }, 15000);
+
+    it("should reject an empty title", async () => {
+      const start = new Date();
+      start.setDate(start.getDate() + 1);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+
+      const result = await calendarModule.createEvent("", "", start, end);
+
+      expect(result.success).toBe(false);
+      console.log("✅ Empty title correctly rejected");
+    }, 15000);
+
+    it("should reject an unknown calendar", async () => {
+      const start = new Date();
+      start.setDate(start.getDate() + 1);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+
+      const result = await calendarModule.createEvent(
+        "NoSuchCalendar12345",
+        "Unknown Calendar Test",
+        start,
+        end,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("NoSuchCalendar12345");
+      console.log("✅ Unknown calendar correctly rejected");
     }, 15000);
   });
 
   describe("openEvent", () => {
-    it("should open an existing event", async () => {
-      // First get some events to find one we can open
-      const existingEvents = await calendarModule.getEvents(5);
-      
-      if (existingEvents.length > 0 && existingEvents[0].id) {
-        const eventToOpen = existingEvents[0];
-        
-        const result = await calendarModule.openEvent(eventToOpen.id);
-        
-        if (result.success) {
-          console.log(`✅ Successfully opened event: ${result.message}`);
-        } else {
-          console.log(`ℹ️ Could not open event: ${result.message}`);
-        }
-        
-        expect(typeof result.success).toBe("boolean");
-        expect(typeof result.message).toBe("string");
-      } else {
-        console.log("ℹ️ No existing events found to test opening");
-      }
-    }, 15000);
-
-    it("should handle opening non-existent event", async () => {
+    it("should report an unknown event id", async () => {
       const result = await calendarModule.openEvent("non-existent-event-id-12345");
-      
+
       expect(result.success).toBe(false);
       expect(typeof result.message).toBe("string");
-      
-      console.log("✅ Handled non-existent event correctly");
-    }, 10000);
-  });
+      console.log(`✅ Unknown event id reported: ${result.message}`);
+    }, 15000);
 
-  describe("Error Handling", () => {
-    it("should handle invalid date formats gracefully", async () => {
-      try {
-        const result = await calendarModule.createEvent(
-          "Invalid Date Test",
-          "invalid-start-date",
-          "invalid-end-date"
-        );
-        
-        expect(result.success).toBe(false);
-        expect(result.message).toBeTruthy();
-        console.log("✅ Invalid dates were correctly rejected");
-      } catch (error) {
-        console.log("✅ Invalid dates threw error (expected behavior)");
-        expect(error instanceof Error).toBe(true);
-      }
-    }, 10000);
+    it("should require an event id", async () => {
+      const result = await calendarModule.openEvent("");
 
-    it("should handle empty event title gracefully", async () => {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const eventEnd = new Date(tomorrow);
-      eventEnd.setHours(tomorrow.getHours() + 1);
-      
-      try {
-        const result = await calendarModule.createEvent(
-          "",
-          tomorrow.toISOString(),
-          eventEnd.toISOString()
-        );
-        
-        expect(result.success).toBe(false);
-        console.log("✅ Empty title was correctly rejected");
-      } catch (error) {
-        console.log("✅ Empty title threw error (expected behavior)");
-        expect(error instanceof Error).toBe(true);
-      }
-    }, 10000);
-
-    it("should handle past dates gracefully", async () => {
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const pastEventEnd = new Date(yesterday);
-      pastEventEnd.setHours(yesterday.getHours() + 1);
-      
-      try {
-        const result = await calendarModule.createEvent(
-          "Past Event Test",
-          yesterday.toISOString(),
-          pastEventEnd.toISOString()
-        );
-        
-        // Past events might be allowed, so check if it succeeded or failed gracefully
-        if (result.success) {
-          console.log("ℹ️ Past event was allowed (this may be normal behavior)");
-        } else {
-          console.log("✅ Past event was correctly rejected");
-        }
-        
-        expect(typeof result.success).toBe("boolean");
-      } catch (error) {
-        console.log("✅ Past event threw error (expected behavior)");
-        expect(error instanceof Error).toBe(true);
-      }
-    }, 10000);
-
-    it("should handle end time before start time gracefully", async () => {
-      const startTime = new Date();
-      startTime.setDate(startTime.getDate() + 1);
-      startTime.setHours(15, 0, 0, 0);
-      
-      const endTime = new Date(startTime);
-      endTime.setHours(14, 0, 0, 0); // End before start
-      
-      try {
-        const result = await calendarModule.createEvent(
-          "Invalid Time Range Test",
-          startTime.toISOString(),
-          endTime.toISOString()
-        );
-        
-        expect(result.success).toBe(false);
-        console.log("✅ Invalid time range was correctly rejected");
-      } catch (error) {
-        console.log("✅ Invalid time range threw error (expected behavior)");
-        expect(error instanceof Error).toBe(true);
-      }
-    }, 10000);
-
-    it("should handle empty search text gracefully", async () => {
-      const searchResults = await calendarModule.searchEvents("", 5);
-      
-      expect(Array.isArray(searchResults)).toBe(true);
-      console.log("✅ Handled empty search text correctly");
+      expect(result.success).toBe(false);
+      console.log("✅ Empty event id correctly rejected");
     }, 10000);
   });
 });

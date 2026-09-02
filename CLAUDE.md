@@ -34,6 +34,18 @@ The calendar module uses Python EventKit instead of AppleScript for performance:
 
 (Customize these with your own calendar names from the Calendar app sidebar)
 
+**Features:**
+
+- `getCalendarList()`: All calendars with their type
+- `getEvents(calendarNames?, daysBack, daysForward, limit)`: Date-windowed query
+- `searchEvents(searchText, calendarNames?, daysBack, daysForward, limit)`
+- `createEvent(calendarName, title, start, end, location?, notes?, isAllDay?)`:
+  an empty `calendarName` uses the Mac's default calendar
+- `openEvent(eventId)` / `deleteEvent(eventId)`
+- Access is requested explicitly. A NotDetermined status must call
+  `requestFullAccessToEventsWithCompletion_`; merely issuing a query does not
+  prompt, and every read then returns empty while appearing to succeed.
+
 **Date range defaults:**
 
 - `daysBack`: 7 days
@@ -65,13 +77,38 @@ The contacts module uses Python Contacts framework for fast queries and full con
 - Returns full contact objects: phone numbers, emails, addresses, notes
 - Rich formatting in MCP handler with emoji icons (📋📞📧🏠)
 
-### Reminders Optimization
+### Reminders Implementation (Python EventKit Bridge)
 
-Reminders module was optimized to query incomplete items only:
+The reminders module uses Python EventKit instead of AppleScript, for the same
+reason as Calendar:
 
-- `getIncompleteReminders(listName)`: Query specific list for incomplete items
-- Users should archive/delete completed items for best performance
-- 31 seconds to query all 13 lists with incomplete items
+- **Old AppleScript approach**: 45-120s per operation, so every call exceeded its
+  15s timeout and returned an empty array. It also never parsed results, because
+  `run-applescript` returns a string rather than a record.
+- **New Python EventKit approach**: ~250ms per operation
+
+**File structure:**
+
+- `reminders-eventkit.py`: Python bridge using the native macOS EventKit framework
+- `utils/reminders-python.ts`: TypeScript wrapper that calls the script via execFile
+- `utils/reminders.ts`: Original AppleScript implementation (deprecated, kept for reference)
+
+**Dependencies:**
+
+- `pyobjc-framework-EventKit` (shared with Calendar)
+- Installed via: `pip3 install pyobjc-framework-EventKit`
+
+**Features:**
+
+- `getAllLists()`: All reminder lists with their IDs
+- `getAllReminders(listName?)`: All reminders, optionally scoped to one list
+- `getIncompleteReminders(listName, includeCompleted?)`: Weekly-review query
+- `searchReminders(searchText)`: Match against reminder names and notes
+- `createReminder(name, listName?, notes?, dueDate?)`: Due dates are honored;
+  omitting `listName` uses the Mac's default list
+- `createList(name)` / `deleteReminder(id)`: Used by the integration tests
+- Errors propagate instead of being swallowed into an empty array, so a failure
+  is distinguishable from "nothing to do"
 
 ## Code Style
 
@@ -126,11 +163,11 @@ Reminders module was optimized to query incomplete items only:
 - Default to querying specific calendars instead of ALL calendars
 - Limit result count to avoid excessive data transfer
 
-### Reminders  
+### Reminders
 
-- Query incomplete items only when possible
-- Encourage users to archive completed items
-- Use list-specific queries instead of global searches
+- Use Python EventKit for all queries (~250ms); never AppleScript
+- Scope to a specific list where possible instead of querying every list
+- Results are capped at 500 reminders per call
 
 ### Contacts
 

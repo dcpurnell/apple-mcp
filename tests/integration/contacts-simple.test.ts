@@ -5,88 +5,71 @@ import * as contactsModule from "../../utils/contacts-python.js";
 describe("Contacts Simple Tests", () => {
 	describe("Basic Contacts Access", () => {
 		it("should access contacts without error", async () => {
-			try {
-				const allNumbers = await contactsModule.getAllNumbers();
+			const contacts = await contactsModule.getAllContacts(50);
 
-				expect(typeof allNumbers).toBe("object");
-				expect(allNumbers).not.toBeNull();
+			expect(Array.isArray(contacts)).toBe(true);
+			console.log(`✅ Successfully accessed contacts, found ${contacts.length}`);
 
-				console.log(
-					`✅ Successfully accessed contacts, found ${Object.keys(allNumbers).length} contacts`,
-				);
-
-				// Basic structure validation
-				for (const [name, phoneNumbers] of Object.entries(allNumbers)) {
-					expect(typeof name).toBe("string");
-					expect(Array.isArray(phoneNumbers)).toBe(true);
-				}
-			} catch (error) {
-				console.error("❌ Contacts access failed:", error);
-				console.log(
-					"ℹ️ This may indicate that Contacts permissions need to be granted",
-				);
-
-				// Don't fail the test - just log the issue
-				expect(error).toBeTruthy(); // Acknowledge there's an error
+			// Basic structure validation
+			for (const contact of contacts) {
+				expect(typeof contact.id).toBe("string");
+				expect(typeof contact.fullName).toBe("string");
+				expect(Array.isArray(contact.phoneNumbers)).toBe(true);
+				expect(Array.isArray(contact.emails)).toBe(true);
 			}
 		}, 30000);
 	});
 
 	describe("Contact Search", () => {
-		it("should handle contact search gracefully", async () => {
-			try {
-				const phoneNumbers = await contactsModule.findNumber("Test");
+		it("should search contacts by name", async () => {
+			const results = await contactsModule.searchContacts("Test", 10);
 
-				expect(Array.isArray(phoneNumbers)).toBe(true);
-				console.log(`✅ Search returned ${phoneNumbers.length} results`);
-			} catch (error) {
-				console.error("❌ Contact search failed:", error);
-				console.log("ℹ️ This may indicate permissions issues");
+			expect(Array.isArray(results)).toBe(true);
+			console.log(`✅ Search returned ${results.length} results`);
 
-				// Don't fail the test
-				expect(error).toBeTruthy();
+			for (const contact of results) {
+				expect(typeof contact.fullName).toBe("string");
 			}
 		}, 15000);
 
 		it("should handle phone number lookup gracefully", async () => {
-			try {
-				const contactName = await contactsModule.findContactByPhone(
-					TEST_DATA.PHONE_NUMBER,
-				);
+			const contactName = await contactsModule.findContactByPhone(
+				TEST_DATA.PHONE_NUMBER,
+			);
 
-				// Should return null or a string, never undefined
-				expect(contactName === null || typeof contactName === "string").toBe(
-					true,
-				);
+			// Should return null or a string, never undefined
+			expect(contactName === null || typeof contactName === "string").toBe(true);
 
-				if (contactName) {
-					console.log(
-						`✅ Found contact for ${TEST_DATA.PHONE_NUMBER}: ${contactName}`,
-					);
-				} else {
-					console.log(`ℹ️ No contact found for ${TEST_DATA.PHONE_NUMBER}`);
-				}
-			} catch (error) {
-				console.error("❌ Phone lookup failed:", error);
-				expect(error).toBeTruthy();
+			if (contactName) {
+				console.log(
+					`✅ Found contact for ${TEST_DATA.PHONE_NUMBER}: ${contactName}`,
+				);
+			} else {
+				console.log(`ℹ️ No contact found for ${TEST_DATA.PHONE_NUMBER}`);
 			}
 		}, 15000);
 	});
 
 	describe("Error Handling", () => {
-		it("should handle invalid input gracefully", async () => {
+		it("should reject an empty search term", async () => {
+			// searchContacts requires a term; an empty one is a caller error, not
+			// an excuse to return every contact.
+			let thrown: unknown;
 			try {
-				const result1 = await contactsModule.findNumber("");
-				const result2 = await contactsModule.findContactByPhone("");
-
-				expect(Array.isArray(result1)).toBe(true);
-				expect(result2 === null || typeof result2 === "string").toBe(true);
-
-				console.log("✅ Empty input handled gracefully");
+				await contactsModule.searchContacts("");
 			} catch (error) {
-				console.log("ℹ️ Empty input caused error (may be expected)");
-				expect(error).toBeTruthy();
+				thrown = error;
 			}
+
+			expect(thrown instanceof Error).toBe(true);
+			console.log("✅ Empty search term correctly rejected");
+		}, 10000);
+
+		it("should return null for an empty phone lookup", async () => {
+			const result = await contactsModule.findContactByPhone("");
+
+			expect(result).toBeNull();
+			console.log("✅ Empty phone lookup handled gracefully");
 		}, 10000);
 	});
 });

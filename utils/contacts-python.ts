@@ -111,6 +111,81 @@ export async function searchContacts(searchTerm: string, limit: number = 50): Pr
 }
 
 /**
+ * Build a lookup index from phone/email to display name.
+ *
+ * Cached because getAllContacts costs ~1s and callers resolve names per
+ * message, which would otherwise spawn one python process per message.
+ */
+let handleIndex: Map<string, string> | null = null;
+let handleIndexAt = 0;
+const HANDLE_INDEX_TTL_MS = 60_000;
+
+/**
+ * Reduce a phone number to comparable digits.
+ *
+ * Contacts stores numbers as "(336) 555-1234" while Messages reports
+ * "+13365551234", so compare on the last 10 digits.
+ */
+function normalizePhone(value: string): string {
+  const digits = value.replace(/\D/g, "");
+  return digits.length > 10 ? digits.slice(-10) : digits;
+}
+
+async function getHandleIndex(): Promise<Map<string, string>> {
+  const now = Date.now();
+  if (handleIndex && now - handleIndexAt < HANDLE_INDEX_TTL_MS) {
+    return handleIndex;
+  }
+
+  const index = new Map<string, string>();
+  const contacts = await getAllContacts(CONFIG.MAX_CONTACTS);
+
+  for (const contact of contacts) {
+    const displayName = contact.fullName || contact.company;
+    if (!displayName) continue;
+
+    for (const phone of contact.phoneNumbers) {
+      const key = normalizePhone(phone.number);
+      if (key && !index.has(key)) index.set(key, displayName);
+    }
+    for (const email of contact.emails) {
+      const key = email.email.trim().toLowerCase();
+      if (key && !index.has(key)) index.set(key, displayName);
+    }
+  }
+
+  handleIndex = index;
+  handleIndexAt = now;
+  return index;
+}
+
+/**
+ * Find a contact's display name by phone number or email address
+ * @param handle A phone number or email address, as reported by Messages
+ * @returns The contact's display name, or null when no contact matches
+ */
+export async function findContactByPhone(handle: string): Promise<string | null> {
+  if (!handle || typeof handle !== "string") {
+    return null;
+  }
+
+  try {
+    const index = await getHandleIndex();
+    const key = handle.includes("@")
+      ? handle.trim().toLowerCase()
+      : normalizePhone(handle);
+
+    return key ? index.get(key) ?? null : null;
+  } catch (error) {
+    // A name lookup must never break the operation that requested it
+    console.error(
+      `Could not resolve contact for "${handle}": ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  }
+}
+
+/**
  * Find contacts by name (wrapper around searchContacts for compatibility)
  */
 export async function findContactByName(name: string): Promise<Contact[]> {
@@ -123,5 +198,6 @@ export type { Contact };
 export default {
   getAllContacts,
   searchContacts,
-  findContactByName
+  findContactByName,
+  findContactByPhone
 };

@@ -37,7 +37,7 @@ let contacts: typeof import("./utils/contacts-python") | null = null;
 let notes: typeof import("./utils/notes").default | null = null;
 let message: typeof import("./utils/message").default | null = null;
 let mail: typeof import("./utils/mail").default | null = null;
-let reminders: typeof import("./utils/reminders").default | null = null;
+let reminders: typeof import("./utils/reminders-python").default | null = null;
 
 let calendar: typeof import("./utils/calendar-python") | null = null;
 let maps: typeof import("./utils/maps").default | null = null;
@@ -48,7 +48,7 @@ type ModuleMap = {
 	notes: typeof import("./utils/notes").default;
 	message: typeof import("./utils/message").default;
 	mail: typeof import("./utils/mail").default;
-	reminders: typeof import("./utils/reminders").default;
+	reminders: typeof import("./utils/reminders-python").default;
 	calendar: typeof import("./utils/calendar-python");
 	maps: typeof import("./utils/maps").default;
 };
@@ -83,7 +83,7 @@ async function loadModule<
 				if (!mail) mail = (await import("./utils/mail")).default;
 				return mail as ModuleMap[T];
 			case "reminders":
-				if (!reminders) reminders = (await import("./utils/reminders")).default;
+				if (!reminders) reminders = (await import("./utils/reminders-python")).default;
 				return reminders as ModuleMap[T];
 			case "calendar":
 				if (!calendar) calendar = await import("./utils/calendar-python");
@@ -138,7 +138,7 @@ async function attemptEagerLoading() {
 		mail = (await import("./utils/mail")).default;
 		console.error("- Mail module loaded successfully");
 
-		reminders = (await import("./utils/reminders")).default;
+		reminders = (await import("./utils/reminders-python")).default;
 		console.error("- Reminders module loaded successfully");
 
 
@@ -927,20 +927,22 @@ end tell`;
 						const { operation } = args;
 
 						if (operation === "list") {
-							// List all reminders (don't also get lists separately to avoid double processing)
-							const allReminders = await remindersModule.getAllReminders();
-							
-							// Extract unique list names from reminders to show available lists
-							const uniqueLists = Array.from(new Set(allReminders.map(r => r.listName)));
-							
+							// EventKit answers both in ~250ms, so report the real set of
+							// lists rather than only those that happen to hold a reminder
+							const [lists, allReminders] = await Promise.all([
+								remindersModule.getAllLists(),
+								remindersModule.getAllReminders(),
+							]);
+
 							return {
 								content: [
 									{
 										type: "text",
-										text: `Found ${uniqueLists.length} lists with ${allReminders.length} reminders.`,
+										text: `Found ${lists.length} lists with ${allReminders.length} reminders.`,
 									},
 								],
-								listNames: uniqueLists,
+								lists,
+								listNames: lists.map((l) => l.name),
 								reminders: allReminders,
 								isError: false,
 							};
@@ -1216,16 +1218,20 @@ end tell`;
 									endDate,
 									location,
 									notes,
+									isAllDay,
 									calendarName,
 								} = args;
-								
+
+								// An empty calendar name lets EventKit pick the user's
+								// default calendar, rather than guessing a literal "Calendar"
 								const result = await calendarModule.createEvent(
-									calendarName || "Calendar",
+									calendarName || "",
 									title!,
 									new Date(startDate!),
 									new Date(endDate!),
 									location,
-									notes
+									notes,
+									isAllDay || false
 								);
 								
 								return {
@@ -1237,6 +1243,7 @@ end tell`;
 												: `Error creating event: ${result.message}`,
 										},
 									],
+									event: result.event,
 									isError: !result.success,
 								};
 							}
@@ -1656,7 +1663,7 @@ function isMailArgs(args: unknown): args is {
 }
 
 function isRemindersArgs(args: unknown): args is {
-	operation: "list" | "search" | "open" | "create" | "listById";
+	operation: "list" | "search" | "open" | "create" | "listById" | "getIncomplete";
 	searchText?: string;
 	name?: string;
 	listName?: string;
@@ -1664,6 +1671,7 @@ function isRemindersArgs(args: unknown): args is {
 	props?: string[];
 	notes?: string;
 	dueDate?: string;
+	includeCompleted?: boolean;
 } {
 	if (typeof args !== "object" || args === null) {
 		return false;
@@ -1674,7 +1682,11 @@ function isRemindersArgs(args: unknown): args is {
 		return false;
 	}
 
-	if (!["list", "search", "open", "create", "listById"].includes(operation)) {
+	if (
+		!["list", "search", "open", "create", "listById", "getIncomplete"].includes(
+			operation,
+		)
+	) {
 		return false;
 	}
 
@@ -1699,6 +1711,14 @@ function isRemindersArgs(args: unknown): args is {
 	if (
 		operation === "listById" &&
 		(typeof (args as any).listId !== "string" || (args as any).listId === "")
+	) {
+		return false;
+	}
+
+	// For getIncomplete operation, listName is required
+	if (
+		operation === "getIncomplete" &&
+		(typeof (args as any).listName !== "string" || (args as any).listName === "")
 	) {
 		return false;
 	}

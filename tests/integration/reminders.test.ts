@@ -1,9 +1,41 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { TEST_DATA } from "../fixtures/test-data.js";
 import { assertNotEmpty, assertValidDate, sleep } from "../helpers/test-utils.js";
-import remindersModule from "../../utils/reminders.js";
+import remindersModule from "../../utils/reminders-python.js";
 
 describe("Reminders Integration Tests", () => {
+  // Some tests write to the default list rather than the test list, so clean up
+  // by name prefix across every list instead of only sweeping the test list.
+  const TEST_NAME_PREFIXES = [
+    TEST_DATA.REMINDERS.testReminder.name,
+    "Due Date Test Reminder",
+    "Default List Test",
+    "Searchable Reminder",
+    "Open Test Reminder",
+    "Invalid Due Date Test",
+    "Non-existent List Test",
+  ];
+
+  beforeAll(async () => {
+    await remindersModule.createList(TEST_DATA.REMINDERS.listName);
+  });
+
+  afterAll(async () => {
+    const all = await remindersModule.getAllReminders();
+    const junk = all.filter((r) =>
+      TEST_NAME_PREFIXES.some((prefix) => r.name.startsWith(prefix)),
+    );
+
+    for (const reminder of junk) {
+      try {
+        await remindersModule.deleteReminder(reminder.id);
+      } catch (error) {
+        console.warn(`Could not delete test reminder "${reminder.name}":`, error);
+      }
+    }
+    console.log(`Cleaned up ${junk.length} test reminder(s)`);
+  });
+
   describe("getAllLists", () => {
     it("should retrieve all reminder lists", async () => {
       const lists = await remindersModule.getAllLists();
@@ -245,7 +277,7 @@ describe("Reminders Integration Tests", () => {
         console.log(`✅ Retrieved reminders with specific properties from "${testList.name}"`);
         
         if (reminders.length > 0) {
-          const firstReminder = reminders[0];
+          const firstReminder = reminders[0] as unknown as Record<string, unknown>;
           
           // Check that requested properties are present
           for (const prop of properties) {
@@ -257,13 +289,20 @@ describe("Reminders Integration Tests", () => {
       }
     }, 15000);
 
-    it("should handle invalid list ID gracefully", async () => {
-      const reminders = await remindersModule.getRemindersFromListById("invalid-list-id");
+    it("should report an invalid list ID instead of returning empty", async () => {
+      // An unknown list id must not look like "the list exists but is empty";
+      // the caller needs to be able to tell those two cases apart.
+      let thrown: unknown;
+      try {
+        await remindersModule.getRemindersFromListById("invalid-list-id");
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown instanceof Error).toBe(true);
+      expect((thrown as Error).message).toContain("invalid-list-id");
       
-      expect(Array.isArray(reminders)).toBe(true);
-      expect(reminders.length).toBe(0);
-      
-      console.log("✅ Handled invalid list ID correctly");
+      console.log("✅ Invalid list ID surfaced a clear error");
     }, 10000);
   });
 

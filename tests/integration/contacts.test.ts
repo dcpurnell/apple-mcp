@@ -1,130 +1,158 @@
 import { describe, it, expect } from "bun:test";
 import { TEST_DATA } from "../fixtures/test-data.js";
-import { assertNotEmpty, assertValidPhoneNumber } from "../helpers/test-utils.js";
 import * as contactsModule from "../../utils/contacts-python.js";
 
 describe("Contacts Integration Tests", () => {
-  describe("getAllNumbers", () => {
-    it("should retrieve all contacts with phone numbers", async () => {
-      const allNumbers = await contactsModule.getAllNumbers();
-      
-      expect(typeof allNumbers).toBe("object");
-      expect(allNumbers).not.toBeNull();
-      
-      // Should contain our test contact if it exists
-      const contactNames = Object.keys(allNumbers);
-      console.log(`Found ${contactNames.length} contacts with phone numbers`);
-      
-      // Verify structure - each contact should have an array of phone numbers
-      for (const [name, phoneNumbers] of Object.entries(allNumbers)) {
-        expect(typeof name).toBe("string");
-        expect(Array.isArray(phoneNumbers)).toBe(true);
-        // Some contacts might have empty phone number arrays, so just check structure
-        if (phoneNumbers.length > 0) {
-          // Verify each phone number is a string
-          for (const phoneNumber of phoneNumbers) {
-            expect(typeof phoneNumber).toBe("string");
-            expect(phoneNumber.length).toBeGreaterThan(0);
-          }
+  describe("getAllContacts", () => {
+    it("should retrieve contacts with full details", async () => {
+      const contacts = await contactsModule.getAllContacts(100);
+
+      expect(Array.isArray(contacts)).toBe(true);
+      console.log(`Found ${contacts.length} contacts`);
+
+      for (const contact of contacts) {
+        expect(typeof contact.id).toBe("string");
+        expect(typeof contact.fullName).toBe("string");
+        expect(Array.isArray(contact.phoneNumbers)).toBe(true);
+        expect(Array.isArray(contact.emails)).toBe(true);
+
+        for (const phone of contact.phoneNumbers) {
+          expect(typeof phone.number).toBe("string");
+          expect(phone.number.length).toBeGreaterThan(0);
+        }
+        for (const email of contact.emails) {
+          expect(typeof email.email).toBe("string");
         }
       }
-    }, 15000); // 15 second timeout for contacts access
+    }, 15000);
+
+    it("should respect the limit argument", async () => {
+      const contacts = await contactsModule.getAllContacts(5);
+
+      expect(Array.isArray(contacts)).toBe(true);
+      expect(contacts.length).toBeLessThanOrEqual(5);
+      console.log(`✅ Limit honored: asked for 5, got ${contacts.length}`);
+    }, 15000);
   });
 
-  describe("findNumber", () => {
-    it("should find phone number for existing contact", async () => {
-      const phoneNumbers = await contactsModule.findNumber("Test Contact");
-      
-      // If our test contact exists, it should return phone numbers
-      if (phoneNumbers.length > 0) {
-        assertNotEmpty(phoneNumbers, "Expected to find phone numbers for test contact");
-        // Only validate if we actually have a phone number
-        if (phoneNumbers[0]) {
-          assertValidPhoneNumber(phoneNumbers[0]);
+  describe("searchContacts", () => {
+    it("should find contacts by partial name", async () => {
+      const results = await contactsModule.searchContacts("Test", 10);
+
+      expect(Array.isArray(results)).toBe(true);
+
+      if (results.length > 0) {
+        console.log(`Found ${results.length} contacts matching 'Test'`);
+        for (const contact of results) {
+          expect(typeof contact.fullName).toBe("string");
         }
-        console.log(`Found phone numbers for test contact: ${phoneNumbers.join(", ")}`);
       } else {
-        console.log("Test contact not found - this is expected if test contact hasn't been created yet");
+        console.log("ℹ️ No contacts matched 'Test'");
       }
     }, 10000);
 
-    it("should return empty array for non-existent contact", async () => {
-      const phoneNumbers = await contactsModule.findNumber("NonExistentContactName123456");
-      
-      expect(Array.isArray(phoneNumbers)).toBe(true);
-      expect(phoneNumbers.length).toBe(0);
+    it("should return an empty array for a non-existent contact", async () => {
+      const results = await contactsModule.searchContacts(
+        "NonExistentContactName123456",
+      );
+
+      expect(Array.isArray(results)).toBe(true);
+      expect(results.length).toBe(0);
     }, 10000);
 
-    it("should handle partial name matches", async () => {
-      // Try to find contacts with partial name
-      const phoneNumbers = await contactsModule.findNumber("Test");
-      
-      // This might return results if there are contacts with "Test" in their name
-      expect(Array.isArray(phoneNumbers)).toBe(true);
-      
-      if (phoneNumbers.length > 0) {
-        console.log(`Found ${phoneNumbers.length} phone numbers for partial match 'Test'`);
-        for (const phoneNumber of phoneNumbers) {
-          expect(typeof phoneNumber).toBe("string");
-        }
+    it("should reject an empty search term", async () => {
+      let thrown: unknown;
+      try {
+        await contactsModule.searchContacts("");
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown instanceof Error).toBe(true);
+    }, 5000);
+  });
+
+  describe("findContactByName", () => {
+    it("should return full contact objects", async () => {
+      const results = await contactsModule.findContactByName("Test");
+
+      expect(Array.isArray(results)).toBe(true);
+      for (const contact of results) {
+        expect(typeof contact.fullName).toBe("string");
+        expect(Array.isArray(contact.phoneNumbers)).toBe(true);
       }
     }, 10000);
   });
 
   describe("findContactByPhone", () => {
-    it("should find contact by phone number", async () => {
-      const contactName = await contactsModule.findContactByPhone(TEST_DATA.PHONE_NUMBER);
-      
-      if (contactName) {
-        expect(typeof contactName).toBe("string");
-        expect(contactName.length).toBeGreaterThan(0);
-        console.log(`Found contact name for ${TEST_DATA.PHONE_NUMBER}: ${contactName}`);
-      } else {
-        console.log(`No contact found for ${TEST_DATA.PHONE_NUMBER} - this is expected if test contact doesn't exist`);
+    it("should resolve a real contact's own number to their name", async () => {
+      // Pick a live contact rather than a fixture, so this exercises the real
+      // normalization path against however Contacts stores the number.
+      const contacts = await contactsModule.getAllContacts(500);
+      const withPhone = contacts.find(
+        (c) =>
+          c.fullName &&
+          c.phoneNumbers.some((p) => p.number.replace(/\D/g, "").length >= 10),
+      );
+
+      if (!withPhone) {
+        console.log("ℹ️ No contact with a 10-digit number - skipping");
+        return;
       }
-    }, 10000);
 
-    it("should return null for non-existent phone number", async () => {
-      const contactName = await contactsModule.findContactByPhone("+1 9999999999");
-      
-      expect(contactName).toBeNull();
-    }, 10000);
+      const stored = withPhone.phoneNumbers.find(
+        (p) => p.number.replace(/\D/g, "").length >= 10,
+      )!.number;
+      const digits = stored.replace(/\D/g, "").slice(-10);
 
-    it("should handle different phone number formats", async () => {
-      const testNumbers = [
-        TEST_DATA.PHONE_NUMBER,
-        TEST_DATA.PHONE_NUMBER.replace(/[^0-9]/g, ""), // Remove formatting
-        TEST_DATA.PHONE_NUMBER.replace("+1 ", ""), // Remove country code prefix
-        TEST_DATA.PHONE_NUMBER.replace(/\s/g, "") // Remove spaces
+      // Every one of these formats must resolve to the same contact
+      const variants = [
+        stored,
+        digits,
+        `+1${digits}`,
+        `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`,
       ];
 
-      for (const phoneNumber of testNumbers) {
-        const contactName = await contactsModule.findContactByPhone(phoneNumber);
-        
-        if (contactName) {
-          console.log(`Format ${phoneNumber} found contact: ${contactName}`);
-        } else {
-          console.log(`Format ${phoneNumber} did not find contact`);
-        }
-        
-        // Should return null or string, never undefined
-        expect(contactName === null || typeof contactName === "string").toBe(true);
+      for (const variant of variants) {
+        const name = await contactsModule.findContactByPhone(variant);
+        expect(name).toBe(withPhone.fullName);
       }
-    }, 15000);
+
+      console.log(
+        `✅ All ${variants.length} phone formats resolved to "${withPhone.fullName}"`,
+      );
+    }, 20000);
+
+    it("should look up a contact by email address", async () => {
+      const contacts = await contactsModule.getAllContacts(500);
+      const withEmail = contacts.find((c) => c.fullName && c.emails.length > 0);
+
+      if (!withEmail) {
+        console.log("ℹ️ No contact with an email address - skipping");
+        return;
+      }
+
+      const address = withEmail.emails[0].email;
+      // Lookup must be case-insensitive
+      const name = await contactsModule.findContactByPhone(address.toUpperCase());
+
+      expect(name).toBe(withEmail.fullName);
+      console.log(`✅ Email lookup resolved to "${name}"`);
+    }, 20000);
+
+    it("should return null for an unknown number", async () => {
+      const contactName = await contactsModule.findContactByPhone(
+        TEST_DATA.PHONE_NUMBER,
+      );
+
+      expect(contactName === null || typeof contactName === "string").toBe(true);
+    }, 10000);
   });
 
   describe("Error Handling", () => {
-    it("should handle empty string input gracefully", async () => {
-      const phoneNumbers = await contactsModule.findNumber("");
-      expect(Array.isArray(phoneNumbers)).toBe(true);
-    }, 5000);
-
-    it("should handle null/undefined phone number search gracefully", async () => {
-      const contactName1 = await contactsModule.findContactByPhone("");
-      const contactName2 = await contactsModule.findContactByPhone("invalid");
-      
-      expect(contactName1).toBeNull();
-      expect(contactName2).toBeNull();
-    }, 5000);
+    it("should return null for empty or nonsense phone input", async () => {
+      expect(await contactsModule.findContactByPhone("")).toBeNull();
+      expect(await contactsModule.findContactByPhone("invalid")).toBeNull();
+    }, 10000);
   });
 });

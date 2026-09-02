@@ -1,3 +1,11 @@
+/**
+ * @deprecated Superseded by utils/reminders-python.ts (native EventKit bridge).
+ *
+ * Kept for reference only. AppleScript against the Reminders app takes 45-120s
+ * per operation, so every call here exceeded its timeout and returned empty.
+ * It also never parsed results: run-applescript returns a string, not a record,
+ * so reminder arrays collapsed into a single "Untitled" placeholder.
+ */
 import { runAppleScript } from "run-applescript";
 import { escapeAppleScript } from "./applescript-escape";
 import { validateText, validateSearchQuery, VALIDATION_LIMITS } from "./input-validation";

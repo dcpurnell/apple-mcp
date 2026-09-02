@@ -1,6 +1,7 @@
 import { run } from "@jxa/run";
 import { runAppleScript } from "run-applescript";
 import { TEST_DATA } from "../fixtures/test-data.js";
+import { validatePhoneNumber } from "../../utils/input-validation.js";
 
 // Timeout for test setup operations
 const SETUP_TIMEOUT_MS = 5000;
@@ -233,13 +234,45 @@ export function assertContains(haystack: string, needle: string, message: string
   }
 }
 
+/**
+ * Assert that a value is a well-formed phone number.
+ *
+ * Delegates to the production validator so tests and the server agree on what
+ * "valid" means. This checks the *format* only - to assert that a number is a
+ * particular one, use assertPhoneNumberMatches.
+ */
 export function assertValidPhoneNumber(phoneNumber: string | null): void {
   if (!phoneNumber) {
     throw new Error("Expected valid phone number, got null or undefined");
   }
-  const normalized = phoneNumber.replace(/[^0-9+]/g, '');
-  if (!normalized.includes('4803764369')) {
-    throw new Error(`Expected phone number to contain test number, got: ${phoneNumber}`);
+
+  const result = validatePhoneNumber(phoneNumber);
+  if (!result.isValid) {
+    throw new Error(`Expected a valid phone number, got "${phoneNumber}": ${result.error}`);
+  }
+}
+
+/**
+ * Assert that two phone numbers refer to the same line, ignoring formatting.
+ *
+ * Contacts stores "+1 (336) 404-3296" while Messages reports "+13364043296",
+ * so compare on the last 10 digits rather than the raw strings.
+ */
+export function assertPhoneNumberMatches(
+  actual: string | null,
+  expected: string = TEST_DATA.PHONE_NUMBER,
+): void {
+  if (!actual) {
+    throw new Error(`Expected phone number "${expected}", got null or undefined`);
+  }
+
+  const normalize = (value: string): string => {
+    const digits = value.replace(/\D/g, "");
+    return digits.length > 10 ? digits.slice(-10) : digits;
+  };
+
+  if (normalize(actual) !== normalize(expected)) {
+    throw new Error(`Expected phone number "${expected}", got "${actual}"`);
   }
 }
 

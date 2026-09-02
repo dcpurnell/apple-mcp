@@ -110,6 +110,28 @@ reason as Calendar:
 - Errors propagate instead of being swallowed into an empty array, so a failure
   is distinguishable from "nothing to do"
 
+### Notes Implementation (AppleScript, bulk property access)
+
+Notes has no public framework equivalent, so it stays on AppleScript - but it
+must not read records or per-note properties:
+
+- **Records do not survive**: `run-applescript` resolves to a plain string, so
+  a returned AppleScript record list collapses. Scripts emit
+  FIELD_SEPARATOR/RECORD_SEPARATOR delimited text (`character id 31`/`30`),
+  parsed by `parseNotes`. Same pattern as `utils/mail.ts`.
+- **Bulk property access**: read whole lists (`name of (notes of folder)`),
+  never one note at a time. Each list is a single Apple event.
+  getAllNotes went from ~16s to ~330ms; findNote from ~35s to ~1s.
+- **Filter in AppleScript**: `notes whose name contains X or plaintext contains X`
+  instead of reading every note's text and comparing in a loop.
+
+Two AppleScript quirks worth remembering:
+
+- Bulk access works on a *specifier* (`notes of currentFolder`) but not on a
+  variable holding the resulting list of refs, so filters are written inline.
+- `name of {}` is an error, so an empty match set must be skipped explicitly.
+- `name of (container of note)` fails to coerce; bind the container first.
+
 ## Code Style
 
 ### TypeScript Configuration

@@ -87,13 +87,63 @@ function parseDelimitedEmails(raw: string | undefined | null): EmailMessage[] {
 }
 
 /**
+ * AppleScript handlers that render a date as an ISO-8601 local wall-clock
+ * string. AppleScript's default coercion produces "Tuesday, September 1, 2026
+ * at 2:10:41 PM", which `new Date()` cannot parse, making the returned
+ * dateSent unusable to callers.
+ */
+const DATE_HELPERS = `
+on pad2(n)
+    set s to (n as integer) as string
+    if (length of s) < 2 then set s to "0" & s
+    return s
+end pad2
+
+on isoOf(d)
+    try
+        return ((year of d) as string) & "-" & pad2((month of d) as integer) & "-" & pad2(day of d) & "T" & pad2(hours of d) & ":" & pad2(minutes of d) & ":" & pad2(seconds of d)
+    on error
+        return ""
+    end try
+end isoOf
+`;
+
+/**
  * Build an AppleScript snippet that populates `targetMailboxes` with either
  * every mailbox (when no account filter is given) or only the mailboxes
  * belonging to the named accounts.
  */
-function buildAccountFilterClause(accountNames?: string[]): string {
+function buildAccountFilterClause(
+	accountNames?: string[],
+	inboxOnly = false,
+): string {
+	// Collecting every mailbox is fine when the caller can cheaply skip most of
+	// them (getUnreadMails checks `unread count` first). For a content search
+	// there is no such shortcut: scanning one account's ~85 mailboxes takes
+	// roughly 18 minutes, because Gmail keeps the full archive in "All Mail"
+	// and every label re-exposes it. Search therefore looks at inboxes only.
+	const collect = (acctExpr: string) =>
+		inboxOnly
+			? `        try
+            set end of targetMailboxes to (first mailbox of ${acctExpr} whose name is "INBOX")
+        on error
+            try
+                set end of targetMailboxes to (first mailbox of ${acctExpr} whose name is "Inbox")
+            end try
+        end try`
+			: `        try
+            repeat with mb in (every mailbox of ${acctExpr})
+                set end of targetMailboxes to mb
+            end repeat
+        end try`;
+
 	if (!accountNames || accountNames.length === 0) {
-		return "    set targetMailboxes to mailboxes";
+		// `mailboxes` at the top level is only the handful of mailboxes that do
+		// not belong to an account (Outbox, Deleted Messages, ...) - it never
+		// includes any account's Inbox, so an unfiltered query found nothing.
+		return `    repeat with currentAccount in accounts
+${collect("currentAccount")}
+    end repeat`;
 	}
 
 	const quotedNames = accountNames
@@ -103,10 +153,7 @@ function buildAccountFilterClause(accountNames?: string[]): string {
 	return `    repeat with acctName in {${quotedNames}}
         try
             set targetAccount to first account whose name is acctName
-            set acctMailboxes to every mailbox of targetAccount
-            repeat with mb in acctMailboxes
-                set end of targetMailboxes to mb
-            end repeat
+${collect("targetAccount")}
         on error
             -- Account not found, skip
         end try
@@ -175,12 +222,16 @@ async function getUnreadMails(limit = 10, accountNames?: string[]): Promise<Emai
 		const maxEmails = Math.min(limit, CONFIG.MAX_EMAILS);
 		const accountFilterClause = buildAccountFilterClause(accountNames);
 
-		const script = `
+		const script = `${DATE_HELPERS}
 tell application "Mail"
     set FS to (character id 31)
     set RS to (character id 30)
     set emailParts to {}
     set emailCount to 0
+    -- Gmail exposes one message under several labels (INBOX, All Mail,
+    -- Important, ...). Without this, one email is emitted repeatedly and
+    -- consumes the caller's limit.
+    set seenIds to {}
     set targetMailboxes to {}
 
 ${accountFilterClause}
@@ -189,6 +240,15 @@ ${accountFilterClause}
         if emailCount >= ${maxEmails} then exit repeat
 
         try
+            -- "unread count" is a cheap property; checking it first skips the
+            -- expensive message query on the vast majority of mailboxes (on a
+            -- typical multi-account setup, hundreds of mailboxes hold none)
+            set mailboxUnread to 0
+            try
+                set mailboxUnread to unread count of currentMailbox
+            end try
+
+            if mailboxUnread > 0 then
             set mailboxName to name of currentMailbox
 
             -- Filter to unread messages directly in AppleScript (much faster
@@ -205,7 +265,7 @@ ${accountFilterClause}
                         set currentMsg to item j of unreadMessages
                         set emailSubject to subject of currentMsg
                         set emailSender to sender of currentMsg
-                        set emailDate to (date sent of currentMsg) as string
+                        set emailDate to my isoOf(date sent of currentMsg)
 
                         set emailMessageId to ""
                         try
@@ -227,12 +287,24 @@ ${accountFilterClause}
                             set emailContent to "[Content not available]"
                         end try
 
-                        set end of emailParts to (emailSubject & FS & emailSender & FS & emailDate & FS & emailContent & FS & "false" & FS & mailboxName & FS & emailMessageId)
-                        set emailCount to emailCount + 1
+                        set isDuplicate to false
+                        if emailMessageId is not "" then
+                            if seenIds contains emailMessageId then
+                                set isDuplicate to true
+                            else
+                                set end of seenIds to emailMessageId
+                            end if
+                        end if
+
+                        if not isDuplicate then
+                            set end of emailParts to (emailSubject & FS & emailSender & FS & emailDate & FS & emailContent & FS & "false" & FS & mailboxName & FS & emailMessageId)
+                            set emailCount to emailCount + 1
+                        end if
                     on error
                         -- Skip problematic messages
                     end try
                 end repeat
+            end if
             end if
         on error
             -- Skip problematic mailboxes
@@ -281,14 +353,18 @@ async function searchMails(
 		const maxEmails = Math.min(limit, CONFIG.MAX_EMAILS);
 		const cleanSearchTerm = searchTerm.toLowerCase();
 		const escapedSearchTerm = escapeAppleScript(cleanSearchTerm);
-		const accountFilterClause = buildAccountFilterClause(accountNames);
+		const accountFilterClause = buildAccountFilterClause(accountNames, true);
 
-		const script = `
+		const script = `${DATE_HELPERS}
 tell application "Mail"
     set FS to (character id 31)
     set RS to (character id 30)
     set emailParts to {}
     set emailCount to 0
+    -- Gmail exposes one message under several labels (INBOX, All Mail,
+    -- Important, ...). Without this, one email is emitted repeatedly and
+    -- consumes the caller's limit.
+    set seenIds to {}
     set searchTerm to "${escapedSearchTerm}"
     set targetMailboxes to {}
 
@@ -314,7 +390,7 @@ ${accountFilterClause}
                         set currentMsg to item j of matchingMessages
                         set emailSubject to subject of currentMsg
                         set emailSender to sender of currentMsg
-                        set emailDate to (date sent of currentMsg) as string
+                        set emailDate to my isoOf(date sent of currentMsg)
                         set emailRead to (read status of currentMsg) as string
 
                         set emailMessageId to ""
@@ -337,8 +413,19 @@ ${accountFilterClause}
                             set emailContent to "[Content not available]"
                         end try
 
-                        set end of emailParts to (emailSubject & FS & emailSender & FS & emailDate & FS & emailContent & FS & emailRead & FS & mailboxName & FS & emailMessageId)
-                        set emailCount to emailCount + 1
+                        set isDuplicate to false
+                        if emailMessageId is not "" then
+                            if seenIds contains emailMessageId then
+                                set isDuplicate to true
+                            else
+                                set end of seenIds to emailMessageId
+                            end if
+                        end if
+
+                        if not isDuplicate then
+                            set end of emailParts to (emailSubject & FS & emailSender & FS & emailDate & FS & emailContent & FS & emailRead & FS & mailboxName & FS & emailMessageId)
+                            set emailCount to emailCount + 1
+                        end if
                     on error
                         -- Skip problematic messages
                     end try
@@ -606,12 +693,16 @@ async function getLatestMails(
 
 		const escapedAccount = escapeAppleScript(account);
 
-		const script = `
+		const script = `${DATE_HELPERS}
 tell application "Mail"
     set FS to (character id 31)
     set RS to (character id 30)
     set emailParts to {}
     set emailCount to 0
+    -- Gmail exposes one message under several labels (INBOX, All Mail,
+    -- Important, ...). Without this, one email is emitted repeatedly and
+    -- consumes the caller's limit.
+    set seenIds to {}
     try
         set targetAccount to first account whose name is "${escapedAccount}"
         set acctMailboxes to every mailbox of targetAccount
@@ -648,7 +739,7 @@ tell application "Mail"
                             set currentMsg to message i of mb
                             set emailSubject to subject of currentMsg
                             set emailSender to sender of currentMsg
-                            set emailDate to (date sent of currentMsg) as string
+                            set emailDate to my isoOf(date sent of currentMsg)
                             set emailRead to (read status of currentMsg) as string
 
                             set emailMessageId to ""
@@ -670,8 +761,19 @@ tell application "Mail"
                                 set emailContent to "[Content not available]"
                             end try
 
-                            set end of emailParts to (emailSubject & FS & emailSender & FS & emailDate & FS & emailContent & FS & emailRead & FS & mailboxName & FS & emailMessageId)
-                            set emailCount to emailCount + 1
+                            set isDuplicate to false
+                            if emailMessageId is not "" then
+                                if seenIds contains emailMessageId then
+                                    set isDuplicate to true
+                                else
+                                    set end of seenIds to emailMessageId
+                                end if
+                            end if
+
+                            if not isDuplicate then
+                                set end of emailParts to (emailSubject & FS & emailSender & FS & emailDate & FS & emailContent & FS & emailRead & FS & mailboxName & FS & emailMessageId)
+                                set emailCount to emailCount + 1
+                            end if
                         on error
                             -- Skip problematic messages
                         end try

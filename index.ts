@@ -774,8 +774,12 @@ end tell`;
 										"Search term is required for search operation",
 									);
 								}
-								// Use default mailboxes unless specific account is provided
-								const accountsToSearch = args.account ? undefined : DEFAULT_MAILBOXES;
+								// Scope to the requested account, or to the configured
+								// defaults. Passing undefined would search every account,
+								// which is the opposite of naming one.
+								const accountsToSearch = args.account
+									? [args.account]
+									: DEFAULT_MAILBOXES;
 								const emails = await mailModule.searchMails(
 									args.searchTerm,
 									args.limit,

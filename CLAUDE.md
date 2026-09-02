@@ -110,6 +110,25 @@ reason as Calendar:
 - Errors propagate instead of being swallowed into an empty array, so a failure
   is distinguishable from "nothing to do"
 
+### Mail Implementation (AppleScript, delimited output)
+
+- **Deduplicate on Message-ID**: Gmail exposes one message under INBOX,
+  All Mail, Important and every label. Without dedup a single email is emitted
+  once per label and consumes the caller's limit.
+- **Never use top-level `mailboxes`**: it returns only mailboxes that belong to
+  no account (Outbox, Deleted Messages, ...), never an account's Inbox. Iterate
+  `every mailbox of account` instead.
+- **Unread queries check `unread count` first**: it is a cheap property, and on
+  a multi-account setup the vast majority of mailboxes hold nothing
+  (680 mailboxes, 2 with unread here). ~30s to ~7s.
+- **Search is inbox-only, deliberately**: scanning one account's mailboxes for
+  a subject match takes ~18 minutes, because Gmail keeps the whole archive in
+  "All Mail" and every label re-exposes it. Search covers each account's INBOX
+  (~0.5s). Archived mail is not reachable through search.
+- **Dates are emitted as ISO-8601** via the `isoOf` handler. AppleScript's
+  default coercion yields "Tuesday, September 1, 2026 at 2:10:41 PM", which
+  `new Date()` cannot parse.
+
 ### Notes Implementation (AppleScript, bulk property access)
 
 Notes has no public framework equivalent, so it stays on AppleScript - but it

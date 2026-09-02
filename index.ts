@@ -784,6 +784,7 @@ end tell`;
 									args.searchTerm,
 									args.limit,
 									accountsToSearch,
+									args.mailbox ? [args.mailbox] : undefined,
 								);
 								return {
 									content: [

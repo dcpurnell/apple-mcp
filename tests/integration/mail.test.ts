@@ -260,11 +260,18 @@ describe("Mail Integration Tests", () => {
       }
     }, 10000);
 
-    it("should handle empty search term gracefully", async () => {
-      const searchResults = await mailModule.searchMails("", 5);
-      
-      expect(Array.isArray(searchResults)).toBe(true);
-      console.log("✅ Handled empty search term correctly");
+    it("should reject an empty search term", async () => {
+      // An empty term is a caller error. Returning [] would be
+      // indistinguishable from "searched everything and found nothing".
+      let thrown: unknown;
+      try {
+        await mailModule.searchMails("", 5);
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown instanceof Error).toBe(true);
+      console.log("✅ Empty search term correctly rejected");
     }, 10000);
 
     it("should handle non-existent account gracefully", async () => {

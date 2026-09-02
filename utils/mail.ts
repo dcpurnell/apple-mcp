@@ -113,29 +113,50 @@ end isoOf
  * every mailbox (when no account filter is given) or only the mailboxes
  * belonging to the named accounts.
  */
+type MailboxScope =
+	| { kind: "all" }
+	| { kind: "inbox" }
+	| { kind: "named"; names: string[] };
+
 function buildAccountFilterClause(
 	accountNames?: string[],
-	inboxOnly = false,
+	scope: MailboxScope = { kind: "all" },
 ): string {
 	// Collecting every mailbox is fine when the caller can cheaply skip most of
 	// them (getUnreadMails checks `unread count` first). For a content search
-	// there is no such shortcut: scanning one account's ~85 mailboxes takes
-	// roughly 18 minutes, because Gmail keeps the full archive in "All Mail"
-	// and every label re-exposes it. Search therefore looks at inboxes only.
-	const collect = (acctExpr: string) =>
-		inboxOnly
-			? `        try
+	// there is no such shortcut: scanning one account's mailboxes takes roughly
+	// 18 minutes, because an archive mailbox holds everything and labels
+	// re-expose it. Search therefore defaults to inboxes, and widens only to
+	// the mailboxes the caller names.
+	const collect = (acctExpr: string) => {
+		if (scope.kind === "all") {
+			return `        try
+            repeat with mb in (every mailbox of ${acctExpr})
+                set end of targetMailboxes to mb
+            end repeat
+        end try`;
+		}
+
+		if (scope.kind === "inbox") {
+			return `        try
             set end of targetMailboxes to (first mailbox of ${acctExpr} whose name is "INBOX")
         on error
             try
                 set end of targetMailboxes to (first mailbox of ${acctExpr} whose name is "Inbox")
             end try
-        end try`
-			: `        try
-            repeat with mb in (every mailbox of ${acctExpr})
-                set end of targetMailboxes to mb
-            end repeat
         end try`;
+		}
+
+		// A named mailbox may not exist on every account, so each lookup is
+		// guarded rather than failing the whole query.
+		return scope.names
+			.map(
+				(name) => `        try
+            set end of targetMailboxes to (first mailbox of ${acctExpr} whose name is "${escapeAppleScript(name)}")
+        end try`,
+			)
+			.join("\n");
+	};
 
 	if (!accountNames || accountNames.length === 0) {
 		// `mailboxes` at the top level is only the handful of mailboxes that do
@@ -337,6 +358,7 @@ async function searchMails(
 	searchTerm: string,
 	limit = 10,
 	accountNames?: string[],
+	mailboxNames?: string[],
 ): Promise<EmailMessage[]> {
 	try {
 		const accessResult = await requestMailAccess();
@@ -353,7 +375,14 @@ async function searchMails(
 		const maxEmails = Math.min(limit, CONFIG.MAX_EMAILS);
 		const cleanSearchTerm = searchTerm.toLowerCase();
 		const escapedSearchTerm = escapeAppleScript(cleanSearchTerm);
-		const accountFilterClause = buildAccountFilterClause(accountNames, true);
+		// Default to inboxes for speed; widen to whatever mailboxes the caller
+		// names (e.g. "Archive", "All Mail") when they want the archive searched
+		const accountFilterClause = buildAccountFilterClause(
+			accountNames,
+			mailboxNames && mailboxNames.length > 0
+				? { kind: "named", names: mailboxNames }
+				: { kind: "inbox" },
+		);
 
 		const script = `${DATE_HELPERS}
 tell application "Mail"
@@ -369,6 +398,12 @@ tell application "Mail"
     set targetMailboxes to {}
 
 ${accountFilterClause}
+
+    -- A named mailbox that exists on no account would otherwise return zero
+    -- results, which is indistinguishable from "searched, found nothing"
+    if (count of targetMailboxes) is 0 then
+        return "ERROR:NO_MAILBOXES"
+    end if
 
     repeat with currentMailbox in targetMailboxes
         if emailCount >= ${maxEmails} then exit repeat
@@ -443,12 +478,24 @@ ${accountFilterClause}
 end tell`;
 
 		const result = (await runAppleScript(script)) as string;
+
+		if (result === "ERROR:NO_MAILBOXES") {
+			const scope = mailboxNames?.length
+				? `mailbox(es) ${mailboxNames.map((m) => `"${m}"`).join(", ")}`
+				: "an inbox";
+			throw new Error(
+				`No ${scope} found on ${accountNames?.length ? `account(s) ${accountNames.map((a) => `"${a}"`).join(", ")}` : "any account"}`,
+			);
+		}
+
 		return parseDelimitedEmails(result);
 	} catch (error) {
-		console.error(
-			`Error searching emails: ${error instanceof Error ? error.message : String(error)}`,
-		);
-		return [];
+		// Rethrow rather than returning []: an empty result must mean "searched
+		// and found nothing", not "the search failed". The mail tool handler
+		// reports this as isError.
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(`Error searching emails: ${message}`);
+		throw new Error(message);
 	}
 }
 

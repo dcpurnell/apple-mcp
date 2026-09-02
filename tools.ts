@@ -95,7 +95,7 @@ const CONTACTS_TOOL: Tool = {
         },
         mailbox: {
           type: "string",
-          description: "Mailbox to use (optional - if not provided, uses inbox or searches across all mailboxes)"
+          description: "Mailbox to search (optional). Search covers each account's inbox by default, for speed; name a mailbox such as 'Archive' or 'All Mail' to search that instead. Archived mail is not reachable without this."
         },
         limit: {
           type: "number",

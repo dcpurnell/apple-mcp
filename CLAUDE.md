@@ -24,6 +24,8 @@ The calendar module uses Python EventKit instead of AppleScript for performance:
 
 - `pyobjc-framework-EventKit`: Python package for native EventKit access
 - Installed via: `pip3 install pyobjc-framework-EventKit`
+- Must be installed for the interpreter the bridge resolves to; see
+  *Python Interpreter Resolution* below
 
 **Default calendars** (configurable in index.ts):
 
@@ -97,6 +99,8 @@ reason as Calendar:
 
 - `pyobjc-framework-EventKit` (shared with Calendar)
 - Installed via: `pip3 install pyobjc-framework-EventKit`
+- Must be installed for the interpreter the bridge resolves to; see
+  *Python Interpreter Resolution* below
 
 **Features:**
 
@@ -109,6 +113,21 @@ reason as Calendar:
 - `createList(name)` / `deleteReminder(id)`: Used by the integration tests
 - Errors propagate instead of being swallowed into an empty array, so a failure
   is distinguishable from "nothing to do"
+
+**MCP handler rules (index.ts):**
+
+- **Only `content` reaches the client.** Sibling keys on the tool result
+  (`reminders`, `lists`, ...) are invisible to Claude, so every operation must
+  render its results into the text block. Returning just a count made
+  getIncomplete useless for morning-reflection/daily-shutdown.
+- **`listById` accepts `listName` as well as `listId`**: `list` is the only
+  operation that hands out ids, so requiring an id made the path unreachable.
+  A name resolves exact-case-insensitive first, then unique substring.
+- **`props` is accepted and ignored**: every property is always returned.
+- **`search` matches list titles too**, not only reminder names and notes -
+  otherwise searching "Top 3" returns nothing while the list holds four items.
+- `list` reports per-list counts derived from `getAllReminders`, which caps at
+  500; the text says so when the cap is hit rather than under-reporting silently.
 
 ### Mail Implementation (AppleScript, delimited output)
 
@@ -153,6 +172,33 @@ Two AppleScript quirks worth remembering:
   variable holding the resulting list of refs, so filters are written inline.
 - `name of {}` is an error, so an empty match set must be skipped explicitly.
 - `name of (container of note)` fails to coerce; bind the container first.
+
+### Python Interpreter Resolution (shared by the three Python bridges)
+
+`utils/python-interpreter.ts` resolves which interpreter runs the bridge
+scripts. The bridges previously invoked a bare `python3` through `execFile`,
+which resolves via PATH:
+
+- **pyobjc is per-interpreter, not system-wide.** Here it exists only in
+  `/Library/Frameworks/Python.framework/Versions/3.12`; `/usr/bin/python3` and
+  `/opt/homebrew/bin/python3` both raise `No module named 'objc'`. So whenever
+  the server started from a context with a different PATH (launchd, a GUI MCP
+  client, an activated venv), Calendar, Reminders and Contacts failed together
+  while Mail/Notes/Messages kept working.
+- **Resolution order**: `APPLE_MCP_PYTHON` if set, then the newest
+  `/Library/Frameworks/Python.framework/Versions/*/bin/python3`, then
+  `/opt/homebrew`, `/usr/local`, `/usr/bin`, and finally bare `python3`.
+- **Candidates are verified, not assumed**: each is probed with
+  `python3 -c "import objc, EventKit"` (or `Contacts`) and the first that
+  succeeds wins. Newest-first alone is not enough - 3.13 is installed here and
+  lacks pyobjc, so the probe is what selects 3.12.
+- **`APPLE_MCP_PYTHON` is strict**: if it is set but cannot import, that is an
+  error naming the interpreter, never a silent fallback to another one.
+- Resolution is cached per module set as a promise, so concurrent callers share
+  one probe (~190ms once, then free). A *failed* resolution is not cached, so
+  installing the dependency takes effect without restarting the server.
+- A resolution failure propagates as a thrown error, matching the Reminders rule
+  that a failure stays distinguishable from "nothing to do".
 
 ## Code Style
 

@@ -393,10 +393,19 @@ def main():
 
             everything = collect(store, get_lists(store), include_completed, MAX_REMINDERS)
             needle = search_text.lower()
-            matches = [
+            # Match the list title too: without it, searching for a list ("Top 3")
+            # returns nothing even though the list exists, and there is no other
+            # way to reach a list's contents by name.
+            direct = [
                 r for r in everything
                 if needle in r["name"].lower() or needle in r["body"].lower()
-            ][:limit]
+            ]
+            seen = {r["id"] for r in direct}
+            by_list = [
+                r for r in everything
+                if needle in r["listName"].lower() and r["id"] not in seen
+            ]
+            matches = (direct + by_list)[:limit]
             print(json.dumps({
                 "reminders": matches,
                 "count": len(matches),

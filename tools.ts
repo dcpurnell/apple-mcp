@@ -132,7 +132,7 @@ const CONTACTS_TOOL: Tool = {
   
   const REMINDERS_TOOL: Tool = {
     name: "reminders",
-    description: "Search, create, and open reminders in Apple Reminders app",
+    description: "Search, create, list, and open reminders in Apple Reminders app. Use 'list' to see every list with its ID, 'listById' (with listName or listId) to read one list's contents, and 'getIncomplete' for open items in a named list.",
     inputSchema: {
       type: "object",
       properties: {
@@ -143,7 +143,7 @@ const CONTACTS_TOOL: Tool = {
         },
         searchText: {
           type: "string",
-          description: "Text to search for in reminders (required for search and open operations)"
+          description: "Text to search for in reminder names, notes, and list names (required for search and open operations). Matching a list name returns that list's reminders."
         },
         name: {
           type: "string",
@@ -151,18 +151,18 @@ const CONTACTS_TOOL: Tool = {
         },
         listName: {
           type: "string",
-          description: "Name of the list to create the reminder in (optional for create operation) OR name of list to get incomplete reminders from (required for getIncomplete operation)"
+          description: "List name: where to create the reminder (optional for create), which list to read (required for getIncomplete; accepted by listById in place of listId)"
         },
         listId: {
           type: "string",
-          description: "ID of the list to get reminders from (required for listById operation)"
+          description: "ID of the list to get reminders from (for listById operation; optional if listName is given). IDs come from the 'list' operation."
         },
         props: {
           type: "array",
           items: {
             type: "string"
           },
-          description: "Properties to include in the reminders (optional for listById operation)"
+          description: "Accepted for backward compatibility and ignored; every reminder property (name, notes, dueDate, completed, list, id) is always returned"
         },
         notes: {
           type: "string",

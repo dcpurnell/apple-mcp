@@ -923,13 +923,50 @@ end tell`;
 
 				case "reminders": {
 					if (!isRemindersArgs(args)) {
-						throw new Error("Invalid arguments for reminders tool");
+						throw new Error(
+							"Invalid arguments for reminders tool. Required per operation: " +
+								"searchText (search, open), name (create), " +
+								"listId or listName (listById), listName (getIncomplete).",
+						);
 					}
 
 					try {
 						const remindersModule = await loadModule("reminders");
 
 						const { operation } = args;
+
+						// MCP clients only ever see `content`, so every result has to be
+						// rendered into text; data left in a sibling key is invisible.
+						type ReminderItem = Awaited<
+							ReturnType<typeof remindersModule.getAllReminders>
+						>[number];
+
+						const MAX_RENDERED = 100;
+
+						const formatReminder = (reminder: ReminderItem): string => {
+							const lines = [
+								`${reminder.completed ? "✅" : "⬜️"} ${reminder.name}`,
+							];
+							if (reminder.dueDate) {
+								lines.push(`   📅 Due: ${reminder.dueDate}`);
+							}
+							const body = reminder.body?.trim();
+							if (body) {
+								lines.push(`   📝 ${body.replace(/\n/g, "\n      ")}`);
+							}
+							lines.push(`   📋 ${reminder.listName} · ID: ${reminder.id}`);
+							return lines.join("\n");
+						};
+
+						const formatReminders = (items: ReminderItem[]): string => {
+							const shown = items
+								.slice(0, MAX_RENDERED)
+								.map(formatReminder)
+								.join("\n\n");
+							return items.length > MAX_RENDERED
+								? `${shown}\n\n... and ${items.length - MAX_RENDERED} more.`
+								: shown;
+						};
 
 						if (operation === "list") {
 							// EventKit answers both in ~250ms, so report the real set of
@@ -939,11 +976,35 @@ end tell`;
 								remindersModule.getAllReminders(),
 							]);
 
+							const counts = new Map<string, number>();
+							for (const reminder of allReminders) {
+								counts.set(
+									reminder.listName,
+									(counts.get(reminder.listName) ?? 0) + 1,
+								);
+							}
+
+							const listing = lists
+								.map(
+									(l) =>
+										`📋 ${l.name} — ${counts.get(l.name) ?? 0} reminder(s)\n   ID: ${l.id}`,
+								)
+								.join("\n");
+
+							// getAllReminders caps at 500, so say so instead of letting a
+							// truncated per-list count read as the whole list
+							const capNote =
+								allReminders.length >= 500
+									? "\n\n(Reminder fetch is capped at 500, so per-list counts may be partial.)"
+									: "";
+
 							return {
 								content: [
 									{
 										type: "text",
-										text: `Found ${lists.length} lists with ${allReminders.length} reminders.`,
+										text:
+											`Found ${lists.length} lists with ${allReminders.length} reminders.\n\n${listing}` +
+											`\n\nUse operation "listById" with listName (or listId) to see a list's contents.${capNote}`,
 									},
 								],
 								lists,
@@ -963,7 +1024,7 @@ end tell`;
 										type: "text",
 										text:
 											results.length > 0
-												? `Found ${results.length} reminders matching "${searchText}".`
+												? `Found ${results.length} reminders matching "${searchText}":\n\n${formatReminders(results)}`
 												: `No reminders found matching "${searchText}".`,
 									},
 								],
@@ -979,7 +1040,7 @@ end tell`;
 									{
 										type: "text",
 										text: result.success
-											? `Opened Reminders app. Found reminder: ${result.reminder?.name}`
+											? `Opened Reminders app. Found reminder:\n\n${formatReminder(result.reminder!)}`
 											: result.message,
 									},
 								],
@@ -999,7 +1060,7 @@ end tell`;
 								content: [
 									{
 										type: "text",
-										text: `Created reminder "${result.name}" ${listName ? `in list "${listName}"` : ""}.`,
+										text: `Created reminder:\n\n${formatReminder(result)}`,
 									},
 								],
 								success: true,
@@ -1007,10 +1068,40 @@ end tell`;
 								isError: false,
 							};
 						} else if (operation === "listById") {
-							// Get reminders from a specific list by ID
-							const { listId, props } = args;
+							// Get reminders from a specific list, addressed by id or by name.
+							// Nothing hands the caller a list id except the `list` operation,
+							// so a name has to work here too.
+							const { listId, listName, props } = args;
+							let targetId = listId;
+							let targetLabel = listId ? `ID "${listId}"` : "";
+
+							if (!targetId) {
+								const lists = await remindersModule.getAllLists();
+								const wanted = listName!.toLowerCase();
+								const exact = lists.filter(
+									(l) => l.name.toLowerCase() === wanted,
+								);
+								const matches = exact.length
+									? exact
+									: lists.filter((l) => l.name.toLowerCase().includes(wanted));
+
+								if (matches.length === 0) {
+									throw new Error(
+										`List "${listName}" not found. Available lists: ${lists.map((l) => l.name).join(", ")}`,
+									);
+								}
+								if (matches.length > 1) {
+									throw new Error(
+										`List name "${listName}" is ambiguous; it matches: ${matches.map((l) => l.name).join(", ")}`,
+									);
+								}
+
+								targetId = matches[0].id;
+								targetLabel = `"${matches[0].name}"`;
+							}
+
 							const results = await remindersModule.getRemindersFromListById(
-								listId!,
+								targetId,
 								props,
 							);
 							return {
@@ -1019,11 +1110,12 @@ end tell`;
 										type: "text",
 										text:
 											results.length > 0
-												? `Found ${results.length} reminders in list with ID "${listId}".`
-												: `No reminders found in list with ID "${listId}".`,
+												? `Found ${results.length} reminders in list ${targetLabel}:\n\n${formatReminders(results)}`
+												: `No reminders found in list ${targetLabel}.`,
 									},
 								],
 								reminders: results,
+								listId: targetId,
 								isError: false,
 							};
 						} else if (operation === "getIncomplete") {
@@ -1036,17 +1128,17 @@ end tell`;
 								listName,
 								includeCompleted || false,
 							);
-							
+
 							const completedCount = results.filter(r => r.completed).length;
 							const incompleteCount = results.length - completedCount;
-							
+
 							return {
 								content: [
 									{
 										type: "text",
 										text:
 											results.length > 0
-												? `Found ${incompleteCount} incomplete reminder(s) in list "${listName}".${includeCompleted ? ` (${completedCount} completed)` : ''}`
+												? `Found ${incompleteCount} incomplete reminder(s) in list "${listName}".${includeCompleted ? ` (${completedCount} completed)` : ''}\n\n${formatReminders(results)}`
 												: `No ${includeCompleted ? '' : 'incomplete '}reminders found in list "${listName}".`,
 									},
 								],
@@ -1712,12 +1804,17 @@ function isRemindersArgs(args: unknown): args is {
 		return false;
 	}
 
-	// For listById operation, listId is required
-	if (
-		operation === "listById" &&
-		(typeof (args as any).listId !== "string" || (args as any).listId === "")
-	) {
-		return false;
+	// For listById operation, either listId or listName identifies the list.
+	// Only the `list` operation hands out ids, so a name has to be accepted.
+	if (operation === "listById") {
+		const hasId =
+			typeof (args as any).listId === "string" && (args as any).listId !== "";
+		const hasName =
+			typeof (args as any).listName === "string" &&
+			(args as any).listName !== "";
+		if (!hasId && !hasName) {
+			return false;
+		}
 	}
 
 	// For getIncomplete operation, listName is required

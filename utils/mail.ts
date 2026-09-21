@@ -64,6 +64,35 @@ function buildMessageUrl(messageId: string): string {
 	return `message://%3c${messageId}%3e`;
 }
 
+/**
+ * Recognise a search term that is an RFC 822 Message-ID rather than prose: a
+ * single token containing "@". Callers paste them in several shapes, so the
+ * angle brackets and the "message://" wrapper that Mail.app uses (and that
+ * buildMessageUrl emits) are stripped back to the raw header value.
+ *
+ * A bare email address has the same shape, so a hit here is only a candidate:
+ * searchMails tries the exact Message-ID match first and falls back to the
+ * ordinary field search when it finds nothing.
+ */
+function parseMessageIdTerm(term: string): string | null {
+	let candidate = term.trim();
+
+	if (/^message:\/\//i.test(candidate)) {
+		try {
+			candidate = decodeURIComponent(candidate.replace(/^message:\/\//i, ""));
+		} catch {
+			candidate = candidate.replace(/^message:\/\//i, "");
+		}
+	}
+	candidate = candidate.replace(/^<+/, "").replace(/>+$/, "");
+
+	if (candidate.length === 0) return null;
+	if (/\s/.test(candidate)) return null;
+	if (!candidate.includes("@")) return null;
+
+	return candidate;
+}
+
 function parseDelimitedEmails(raw: string | undefined | null): EmailMessage[] {
 	if (!raw) return [];
 
@@ -349,16 +378,31 @@ end tell`;
 }
 
 /**
- * Search for emails by search term
- * @param searchTerm - Text to search for in email subjects
+ * Search for emails by search term.
+ *
+ * Matching covers subject *and* sender, plus message content when
+ * `includeBody` is set. Subject-only matching silently missed the commonest
+ * query of all - a person's name, which lives in `sender` and usually not in
+ * the subject - and returned zero, which is indistinguishable from "no such
+ * mail". Content stays opt-in because Mail must read each body to test it
+ * (~165ms per message, against free for the indexed header properties), which
+ * is ruinous once the caller points `mailboxNames` at an archive.
+ *
+ * A term shaped like a Message-ID is matched exactly against `message id`
+ * first, then falls back to the field search; see parseMessageIdTerm.
+ *
+ * @param searchTerm - Text to match against subject/sender, or an exact Message-ID
  * @param limit - Maximum number of emails to return
- * @param accountNames - Optional array of account names to filter (not yet implemented in AppleScript)
+ * @param accountNames - Optional array of account names to restrict the search to
+ * @param mailboxNames - Optional mailbox names; defaults to each account's inbox
+ * @param includeBody - Also match message content (slow; off by default)
  */
 async function searchMails(
 	searchTerm: string,
 	limit = 10,
 	accountNames?: string[],
 	mailboxNames?: string[],
+	includeBody = false,
 ): Promise<EmailMessage[]> {
 	try {
 		const accessResult = await requestMailAccess();
@@ -373,8 +417,6 @@ async function searchMails(
 		}
 
 		const maxEmails = Math.min(limit, CONFIG.MAX_EMAILS);
-		const cleanSearchTerm = searchTerm.toLowerCase();
-		const escapedSearchTerm = escapeAppleScript(cleanSearchTerm);
 		// Default to inboxes for speed; widen to whatever mailboxes the caller
 		// names (e.g. "Archive", "All Mail") when they want the archive searched
 		const accountFilterClause = buildAccountFilterClause(
@@ -384,7 +426,9 @@ async function searchMails(
 				: { kind: "inbox" },
 		);
 
-		const script = `${DATE_HELPERS}
+		// `predicate` is the AppleScript `whose` clause that selects messages;
+		// `term` is what `searchTerm` is bound to inside the script.
+		const buildScript = (predicate: string, term: string) => `${DATE_HELPERS}
 tell application "Mail"
     set FS to (character id 31)
     set RS to (character id 30)
@@ -394,7 +438,7 @@ tell application "Mail"
     -- Important, ...). Without this, one email is emitted repeatedly and
     -- consumes the caller's limit.
     set seenIds to {}
-    set searchTerm to "${escapedSearchTerm}"
+    set searchTerm to "${term}"
     set targetMailboxes to {}
 
 ${accountFilterClause}
@@ -412,8 +456,8 @@ ${accountFilterClause}
             set mailboxName to name of currentMailbox
 
             -- Filter matching messages directly in AppleScript (much faster
-            -- than fetching every message and checking the subject in a loop)
-            set matchingMessages to (messages of currentMailbox whose subject contains searchTerm)
+            -- than fetching every message and checking the fields in a loop)
+            set matchingMessages to ${predicate}
             set mmCount to count of matchingMessages
 
             if mmCount > 0 then
@@ -477,18 +521,50 @@ ${accountFilterClause}
     return resultText
 end tell`;
 
-		const result = (await runAppleScript(script)) as string;
+		const runSearch = async (
+			predicate: string,
+			term: string,
+		): Promise<EmailMessage[]> => {
+			const result = (await runAppleScript(
+				buildScript(predicate, term),
+			)) as string;
 
-		if (result === "ERROR:NO_MAILBOXES") {
-			const scope = mailboxNames?.length
-				? `mailbox(es) ${mailboxNames.map((m) => `"${m}"`).join(", ")}`
-				: "an inbox";
-			throw new Error(
-				`No ${scope} found on ${accountNames?.length ? `account(s) ${accountNames.map((a) => `"${a}"`).join(", ")}` : "any account"}`,
+			if (result === "ERROR:NO_MAILBOXES") {
+				const scope = mailboxNames?.length
+					? `mailbox(es) ${mailboxNames.map((m) => `"${m}"`).join(", ")}`
+					: "an inbox";
+				throw new Error(
+					`No ${scope} found on ${accountNames?.length ? `account(s) ${accountNames.map((a) => `"${a}"`).join(", ")}` : "any account"}`,
+				);
+			}
+
+			return parseDelimitedEmails(result);
+		};
+
+		// An exact Message-ID lookup is a cheap indexed query, so it is tried
+		// first and the term is passed through unchanged rather than lowercased,
+		// to compare against the header value as it was given.
+		const messageId = parseMessageIdTerm(searchTerm);
+		if (messageId) {
+			const exactMatches = await runSearch(
+				"(messages of currentMailbox whose message id is searchTerm)",
+				escapeAppleScript(messageId),
 			);
+			if (exactMatches.length > 0) return exactMatches;
+			// A bare email address has the same shape as a Message-ID, so a miss
+			// is not an answer - fall through to the ordinary field search.
 		}
 
-		return parseDelimitedEmails(result);
+		const fields = [
+			"subject contains searchTerm",
+			"sender contains searchTerm",
+			...(includeBody ? ["content contains searchTerm"] : []),
+		].join(" or ");
+
+		return await runSearch(
+			`(messages of currentMailbox whose ${fields})`,
+			escapeAppleScript(searchTerm.toLowerCase()),
+		);
 	} catch (error) {
 		// Rethrow rather than returning []: an empty result must mean "searched
 		// and found nothing", not "the search failed". The mail tool handler

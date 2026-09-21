@@ -1,4 +1,5 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeAll } from "bun:test";
+import { runAppleScript } from "run-applescript";
 import { TEST_DATA } from "../fixtures/test-data.js";
 import { assertNotEmpty, assertValidDate, sleep } from "../helpers/test-utils.js";
 import mailModule from "../../utils/mail.js";
@@ -181,6 +182,166 @@ describe("Mail Integration Tests", () => {
       
       console.log("✅ Handled search with no results correctly");
     }, 10000);
+  });
+
+  describe("searchMails field coverage", () => {
+    // Seeded from a real inbox message, so these do not depend on any
+    // particular email existing on the machine running them. Only inbox
+    // messages qualify, because searchMails defaults to inbox scope.
+    //
+    // Read with a direct one-shot AppleScript rather than getLatestMails:
+    // that enumerates every mailbox of an account and can exceed its
+    // AppleScript timeout on a large one, and a killed osascript leaves Mail
+    // busy enough that the following access check fails too. Looking the
+    // inbox up by name instead (as buildAccountFilterClause does) keeps this
+    // at ~0.2s, inside the default hook timeout.
+    let seed: { messageId: string; sender: string; messageUrl: string } | null =
+      null;
+
+    beforeAll(async () => {
+      const raw = await runAppleScript(`
+tell application "Mail"
+    repeat with acct in accounts
+        set inbx to missing value
+        try
+            set inbx to (first mailbox of acct whose name is "INBOX")
+        on error
+            try
+                set inbx to (first mailbox of acct whose name is "Inbox")
+            end try
+        end try
+        if inbx is not missing value then
+            try
+                if (count of messages of inbx) > 0 then
+                    set m to message 1 of inbx
+                    set mid to message id of m
+                    if mid is not "" then return mid & "|" & (sender of m)
+                end if
+            end try
+        end if
+    end repeat
+    return ""
+end tell`);
+
+      const [messageId, sender] = String(raw).split("|");
+      if (messageId && sender && sender.includes("@")) {
+        seed = {
+          messageId,
+          sender,
+          messageUrl: `message://%3c${messageId}%3e`,
+        };
+        console.log(`Seeded from: ${sender}`);
+      }
+    });
+
+    it("should find a message by its exact Message-ID", async () => {
+      const email = seed;
+      if (!email) {
+        console.log("ℹ️ Skipping - no inbox message available to seed from");
+        return;
+      }
+
+      const results = await mailModule.searchMails(email.messageId, 5);
+
+      expect(results.length).toBeGreaterThan(0);
+      expect(results.some((e: any) => e.messageId === email.messageId)).toBe(true);
+      console.log(`✅ Message-ID lookup returned "${results[0].subject}"`);
+    }, 30000);
+
+    it("should accept bracketed and message:// forms of a Message-ID", async () => {
+      const email = seed;
+      if (!email) {
+        console.log("ℹ️ Skipping - no inbox message available to seed from");
+        return;
+      }
+
+      for (const form of [`<${email.messageId}>`, email.messageUrl]) {
+        const results = await mailModule.searchMails(form, 5);
+        expect(results.some((e: any) => e.messageId === email.messageId)).toBe(true);
+        await sleep(500);
+      }
+
+      console.log("✅ Bracketed and message:// Message-IDs both resolve");
+    }, 30000);
+
+    it("should match the sender, not only the subject", async () => {
+      const email = seed;
+      if (!email) {
+        console.log("ℹ️ Skipping - no inbox message available to seed from");
+        return;
+      }
+
+      // The address local part is always present in `sender` and, unlike a
+      // display name, is a single token safe to feed back into the search.
+      const localPart = email.sender.split("@")[0].split(/[<\s]/).pop() || "";
+      if (localPart.length < 3) {
+        console.log("ℹ️ Skipping - seed sender has no usable token");
+        return;
+      }
+
+      const results = await mailModule.searchMails(localPart, 10);
+
+      expect(results.length).toBeGreaterThan(0);
+      expect(
+        results.some((e: any) =>
+          e.sender.toLowerCase().includes(localPart.toLowerCase()),
+        ),
+      ).toBe(true);
+      console.log(`✅ Sender search for "${localPart}" found ${results.length} email(s)`);
+    }, 30000);
+
+    it("should fall back to a field search for a bare email address", async () => {
+      const email = seed;
+      if (!email) {
+        console.log("ℹ️ Skipping - no inbox message available to seed from");
+        return;
+      }
+
+      // A bare address has the same shape as a Message-ID. It matches no
+      // `message id`, so it must fall through to subject/sender rather than
+      // returning the empty set.
+      const address = email.sender.match(/[^<\s]+@[^>\s]+/)?.[0];
+      if (!address) {
+        console.log("ℹ️ Skipping - seed sender has no address");
+        return;
+      }
+
+      const results = await mailModule.searchMails(address, 10);
+
+      expect(results.length).toBeGreaterThan(0);
+      console.log(`✅ Address search for "${address}" found ${results.length} email(s)`);
+    }, 30000);
+
+    it("should match no fewer messages with includeBody than without", async () => {
+      const email = seed;
+      if (!email) {
+        console.log("ℹ️ Skipping - no inbox message available to seed from");
+        return;
+      }
+
+      const localPart = email.sender.split("@")[0].split(/[<\s]/).pop() || "";
+      if (localPart.length < 3) {
+        console.log("ℹ️ Skipping - seed sender has no usable token");
+        return;
+      }
+
+      // Body matching only widens the `whose` clause, so the hit count is
+      // monotonic even once the per-call cap is reached.
+      const headersOnly = await mailModule.searchMails(localPart, 20);
+      await sleep(500);
+      const withBody = await mailModule.searchMails(
+        localPart,
+        20,
+        undefined,
+        undefined,
+        true,
+      );
+
+      expect(withBody.length).toBeGreaterThanOrEqual(headersOnly.length);
+      console.log(
+        `✅ includeBody: ${headersOnly.length} -> ${withBody.length} email(s)`,
+      );
+    }, 60000);
   });
 
   describe("sendMail", () => {

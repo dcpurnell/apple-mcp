@@ -785,18 +785,29 @@ end tell`;
 									args.limit,
 									accountsToSearch,
 									args.mailbox ? [args.mailbox] : undefined,
+									args.includeBody,
 								);
+								// Say what was actually searched. A bare "no emails
+								// found" reads as "no such mail" when it may only mean
+								// the term was in a place this search does not look.
+								const scopeNote = `${args.account ? ` in account "${args.account}"` : ""}${args.mailbox ? ` and mailbox "${args.mailbox}"` : ""}`;
+								const widenHint = args.includeBody
+									? ""
+									: "\n\nSubjects and senders were searched, but not message bodies. Retry with includeBody: true to search bodies as well (slower)." +
+										(args.mailbox
+											? ""
+											: ' Only inboxes were searched; pass mailbox: "Archive" (or "All Mail") to reach archived mail.');
 								return {
 									content: [
 										{
 											type: "text",
 											text:
 												emails.length > 0
-													? `Found ${emails.length} email(s) for "${args.searchTerm}"${args.account ? ` in account "${args.account}"` : ""}${args.mailbox ? ` and mailbox "${args.mailbox}"` : ""}:\n\n` +
+													? `Found ${emails.length} email(s) for "${args.searchTerm}"${scopeNote}:\n\n` +
 														emails
 															.map((email: any) => formatEmailForDisplay(email, 200))
 															.join("\n\n")
-													: `No emails found for "${args.searchTerm}"${args.account ? ` in account "${args.account}"` : ""}${args.mailbox ? ` and mailbox "${args.mailbox}"` : ""}`,
+													: `No emails found for "${args.searchTerm}"${scopeNote}.${widenHint}`,
 										},
 									],
 									isError: false,
@@ -1695,6 +1706,7 @@ function isMailArgs(args: unknown): args is {
 	mailbox?: string;
 	limit?: number;
 	searchTerm?: string;
+	includeBody?: boolean;
 	to?: string;
 	subject?: string;
 	body?: string;
@@ -1709,6 +1721,7 @@ function isMailArgs(args: unknown): args is {
 		mailbox,
 		limit,
 		searchTerm,
+		includeBody,
 		to,
 		subject,
 		body,
@@ -1753,6 +1766,8 @@ function isMailArgs(args: unknown): args is {
 	if (account && typeof account !== "string") return false;
 	if (mailbox && typeof mailbox !== "string") return false;
 	if (limit && typeof limit !== "number") return false;
+	// Tested against undefined rather than falsiness: `false` is a valid value
+	if (includeBody !== undefined && typeof includeBody !== "boolean") return false;
 	if (cc && typeof cc !== "string") return false;
 	if (bcc && typeof bcc !== "string") return false;
 

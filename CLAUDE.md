@@ -140,6 +140,22 @@ reason as Calendar:
 - **Unread queries check `unread count` first**: it is a cheap property, and on
   a multi-account setup the vast majority of mailboxes hold nothing
   (680 mailboxes, 2 with unread here). ~30s to ~7s.
+- **Search matches subject *and* sender; body is opt-in**: subject-only
+  matching silently missed the commonest query there is - a person's name,
+  which lives in `sender` and usually nowhere in the subject - and returned
+  zero, which reads as "no such mail". `sender` is an indexed header property
+  and costs nothing; `content` is not (~165ms per message, measured at 0.5s
+  vs 8.5s over the same inboxes), so body matching is behind `includeBody`
+  and must stay off by default, especially with `mailbox: "Archive"`.
+- **A Message-ID term is matched exactly, then falls back**: a term shaped
+  like a Message-ID (one token containing `@`, with `<>` or a `message://`
+  wrapper stripped) is first run against `message id`, which is an indexed
+  lookup. A bare email address has that same shape, so a miss falls through
+  to the subject/sender search rather than returning the empty set.
+- **An empty search result says what was searched**: the MCP handler appends
+  which fields and which mailboxes were covered. Otherwise a miss caused by
+  narrow scope is indistinguishable from mail that is not there - the same
+  failure the Reminders rules guard against.
 - **Search defaults to inboxes, and widens on request**: scanning one account's
   mailboxes for a subject match takes ~18 minutes, because an archive mailbox
   holds everything and labels re-expose it. Search covers each account's INBOX

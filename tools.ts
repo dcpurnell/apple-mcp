@@ -103,7 +103,11 @@ const CONTACTS_TOOL: Tool = {
         },
         searchTerm: {
           type: "string",
-          description: "Text to search for in emails (required for search operation)"
+          description: "Text to search for (required for search operation). Matches email subjects and senders, so a person's name or address works. Pass a Message-ID (with or without angle brackets, or a 'message://' URL) to look up that exact message."
+        },
+        includeBody: {
+          type: "boolean",
+          description: "Also search message bodies (optional, for search operation, default false). Much slower - Mail reads every message body - so use it only after a subject/sender search comes up empty, and prefer narrowing with account/mailbox first."
         },
         to: {
           type: "string",

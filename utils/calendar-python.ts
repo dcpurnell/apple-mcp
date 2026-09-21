@@ -3,6 +3,7 @@ import { promisify } from "util";
 import path from "path";
 import { fileURLToPath } from "url";
 import { validateText, validateSearchQuery } from './input-validation';
+import { getEventKitPython } from "./python-interpreter";
 
 const execFileAsync = promisify(execFile);
 
@@ -69,7 +70,7 @@ async function executePythonScript(
 ): Promise<PythonEventKitResponse> {
   try {
     const { stdout, stderr } = await execFileAsync(
-      "python3",
+      await getEventKitPython(),
       [PYTHON_SCRIPT, command, ...args],
       { timeout: CONFIG.TIMEOUT_MS }
     );

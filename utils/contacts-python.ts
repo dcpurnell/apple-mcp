@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import { fileURLToPath } from "url";
+import { getContactsPython } from "./python-interpreter";
 
 const execFileAsync = promisify(execFile);
 
@@ -61,7 +62,7 @@ async function executePythonScript(
 ): Promise<PythonContactsResponse> {
   try {
     const { stdout, stderr } = await execFileAsync(
-      "python3",
+      await getContactsPython(),
       [PYTHON_SCRIPT, command, ...args],
       { timeout: CONFIG.TIMEOUT_MS }
     );

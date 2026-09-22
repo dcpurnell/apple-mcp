@@ -145,7 +145,93 @@ end isoOf
 type MailboxScope =
 	| { kind: "all" }
 	| { kind: "inbox" }
-	| { kind: "named"; names: string[] };
+	| { kind: "named"; specs: MailboxSpec[] };
+
+/**
+ * Mail nests mailboxes, and leaf names repeat freely - this account has two
+ * "Projects" (under Inbox and under Deleted Items) and three "Wellness". A
+ * mailbox is therefore identified by its account plus its slash-delimited
+ * path, which is also how Mail itself addresses one:
+ * `mailbox "Inbox/Elon Groups/Raving Fan" of account "..."`.
+ */
+interface MailboxSpec {
+	// Omitted when the caller named a mailbox without saying which account,
+	// in which case every account in scope is tried.
+	account?: string;
+	path: string;
+}
+
+// What separates account from path in a listed mailbox name. Spaces around
+// the slash keep it distinguishable from the path separator, so a listed name
+// round-trips straight back into the `mailbox` parameter.
+const MAILBOX_DISPLAY_SEPARATOR = " / ";
+
+// Mailboxes that belong to no account - Outbox, SendLater, Deleted Messages -
+// are reachable only at application level, and are what the old broken
+// listing returned by itself. They are listed under Mail's own name for them
+// so they stay both visible and addressable.
+const LOCAL_ACCOUNT_LABEL = "On My Mac";
+
+function isLocalAccountLabel(name: string): boolean {
+	return name.trim().toLowerCase() === LOCAL_ACCOUNT_LABEL.toLowerCase();
+}
+
+function formatMailboxSpec(spec: Required<MailboxSpec>): string {
+	return `${spec.account}${MAILBOX_DISPLAY_SEPARATOR}${spec.path}`;
+}
+
+/**
+ * Accept every shape a caller plausibly has to hand: a listed name
+ * ("Account / Inbox/Sub"), an account-qualified path ("Account/Inbox/Sub"),
+ * a bare path ("Inbox/Sub"), or a bare leaf name ("Archive").
+ *
+ * `accountNames` is only consulted for the middle form, which is otherwise
+ * indistinguishable from a path whose first segment happens to be a mailbox.
+ */
+function parseMailboxSpec(spec: string, accountNames: string[]): MailboxSpec {
+	const trimmed = spec.trim();
+
+	const sepIndex = trimmed.indexOf(MAILBOX_DISPLAY_SEPARATOR);
+	if (sepIndex > 0) {
+		return {
+			account: trimmed.slice(0, sepIndex).trim(),
+			path: trimmed.slice(sepIndex + MAILBOX_DISPLAY_SEPARATOR.length).trim(),
+		};
+	}
+
+	const slashIndex = trimmed.indexOf("/");
+	if (slashIndex > 0) {
+		const head = trimmed.slice(0, slashIndex).trim();
+		const match = accountNames.find(
+			(name) => name.toLowerCase() === head.toLowerCase(),
+		);
+		if (match) {
+			return { account: match, path: trimmed.slice(slashIndex + 1).trim() };
+		}
+	}
+
+	return { path: trimmed };
+}
+
+/**
+ * AppleScript that resolves one mailbox under `acctExpr` and appends it to
+ * `targetMailboxes`. The path form is tried first because it is exact; the
+ * `whose name is` form is the fallback that lets a caller name a leaf
+ * ("Archive", "All Mail") without knowing where it sits.
+ */
+function buildMailboxLookup(acctExpr: string | null, path: string): string {
+	const escapedPath = escapeAppleScript(path);
+	// An empty suffix addresses application level, where the mailboxes that
+	// belong to no account live.
+	const of = acctExpr ? ` of ${acctExpr}` : "";
+	return `        try
+            set end of targetMailboxes to (mailbox "${escapedPath}"${of})
+        on error
+            try
+                set end of targetMailboxes to (first mailbox${of} whose name is "${escapedPath}")
+            end try
+        end try`;
+}
 
 function buildAccountFilterClause(
 	accountNames?: string[],
@@ -177,15 +263,38 @@ function buildAccountFilterClause(
 		}
 
 		// A named mailbox may not exist on every account, so each lookup is
-		// guarded rather than failing the whole query.
-		return scope.names
-			.map(
-				(name) => `        try
-            set end of targetMailboxes to (first mailbox of ${acctExpr} whose name is "${escapeAppleScript(name)}")
-        end try`,
-			)
+		// guarded rather than failing the whole query. Specs that name their
+		// own account are resolved separately, below.
+		return scope.specs
+			.filter((spec) => !spec.account)
+			.map((spec) => buildMailboxLookup(acctExpr, spec.path))
 			.join("\n");
 	};
+
+	// A spec that carries its account is resolved against that account
+	// directly, so a name copied out of the mailbox listing reaches exactly
+	// the mailbox it came from. An unqualified one also gets an
+	// application-level attempt, which is the only way to reach a mailbox
+	// that belongs to no account.
+	const qualifiedClause =
+		scope.kind === "named"
+			? scope.specs
+					.map((spec) => {
+						if (!spec.account) {
+							return buildMailboxLookup(null, spec.path);
+						}
+
+						if (isLocalAccountLabel(spec.account)) {
+							return buildMailboxLookup(null, spec.path);
+						}
+
+						return `    try
+        set qualifiedAccount to first account whose name is "${escapeAppleScript(spec.account)}"
+${buildMailboxLookup("qualifiedAccount", spec.path)}
+    end try`;
+					})
+					.join("\n")
+			: "";
 
 	if (!accountNames || accountNames.length === 0) {
 		// `mailboxes` at the top level is only the handful of mailboxes that do
@@ -193,7 +302,8 @@ function buildAccountFilterClause(
 		// includes any account's Inbox, so an unfiltered query found nothing.
 		return `    repeat with currentAccount in accounts
 ${collect("currentAccount")}
-    end repeat`;
+    end repeat
+${qualifiedClause}`;
 	}
 
 	const quotedNames = accountNames
@@ -207,7 +317,8 @@ ${collect("targetAccount")}
         on error
             -- Account not found, skip
         end try
-    end repeat`;
+    end repeat
+${qualifiedClause}`;
 }
 
 /**
@@ -417,12 +528,25 @@ async function searchMails(
 		}
 
 		const maxEmails = Math.min(limit, CONFIG.MAX_EMAILS);
+
+		// Only the unseparated "Account/Path" form needs the account list to
+		// tell an account from a first path segment, so the extra call is
+		// skipped unless one of those is actually present.
+		const needsAccountList = (mailboxNames ?? []).some(
+			(name) =>
+				!name.includes(MAILBOX_DISPLAY_SEPARATOR) && name.includes("/"),
+		);
+		const knownAccounts = needsAccountList ? await getAccounts() : [];
+		const mailboxSpecs = (mailboxNames ?? []).map((name) =>
+			parseMailboxSpec(name, knownAccounts),
+		);
+
 		// Default to inboxes for speed; widen to whatever mailboxes the caller
 		// names (e.g. "Archive", "All Mail") when they want the archive searched
 		const accountFilterClause = buildAccountFilterClause(
 			accountNames,
-			mailboxNames && mailboxNames.length > 0
-				? { kind: "named", names: mailboxNames }
+			mailboxSpecs.length > 0
+				? { kind: "named", specs: mailboxSpecs }
 				: { kind: "inbox" },
 		);
 
@@ -678,31 +802,143 @@ end tell`;
 }
 
 /**
- * Get list of mailboxes (simplified for performance)
+ * List every mailbox, across every account, as "Account / Path/To/Mailbox".
+ *
+ * The previous implementation read `name of every mailbox` at application
+ * level, which returns only the mailboxes belonging to no account - Outbox,
+ * Deleted Messages, SendLater - and so reported three mailboxes on a machine
+ * that has 653. Account mailboxes hang off each account, and the ones nested
+ * inside another mailbox need their path to be addressable at all.
+ *
+ * Two quirks shape the AppleScript:
+ *
+ * - `every mailbox of account` is already *flat*: it contains nested
+ *   mailboxes as well, but each reports only its leaf `name`, and leaf names
+ *   repeat (two "Projects" here, three "Wellness"). So the list alone cannot
+ *   say where a mailbox sits.
+ * - `name of (container of (every mailbox of acct))` is a single bulk read
+ *   that gives every mailbox's parent, `missing value` for a top-level one.
+ *
+ * Those two reads identify the roots and the branches; the tree is then
+ * walked by path, asking for children only from mailboxes that are somebody's
+ * parent. That is one Apple event per branch instead of one per mailbox:
+ * ~0.6s for all 653 here, against ~14s for the naive walk of one account.
+ *
+ * The account-less mailboxes are walked the same way at application level and
+ * listed under "On My Mac", so the three the old implementation returned are
+ * still there rather than silently dropped.
  */
-async function getMailboxes(): Promise<string[]> {
+async function listMailboxes(accountName?: string): Promise<string[]> {
 	try {
 		const accessResult = await requestMailAccess();
 		if (!accessResult.hasAccess) {
 			throw new Error(accessResult.message);
 		}
 
+		const wantsLocalOnly = accountName ? isLocalAccountLabel(accountName) : false;
+		const accountScope =
+			accountName?.trim() && !wantsLocalOnly
+				? `{first account whose name is "${escapeAppleScript(accountName.trim())}"}`
+				: wantsLocalOnly
+					? "{}"
+					: "accounts";
+		// The account-less mailboxes are listed unless one real account was asked for
+		const includeLocal = !accountName?.trim() || wantsLocalOnly;
+
 		const script = `
 tell application "Mail"
+    set FS to (character id 31)
     set RS to (character id 30)
-    try
-        set boxNames to name of every mailbox
-        set AppleScript's text item delimiters to RS
-        set resultText to boxNames as string
-        set AppleScript's text item delimiters to ""
-        return resultText
-    on error
-        return ""
-    end try
+    set out to {}
+
+    -- Each scope is an account, or missing value for the mailboxes that
+    -- belong to no account and are addressable only at application level.
+    set scopes to {}
+    repeat with acct in ${accountScope}
+        set end of scopes to acct
+    end repeat
+    if ${includeLocal ? "true" : "false"} then set end of scopes to missing value
+
+    repeat with acct in scopes
+        try
+            -- A repeat loop binds a reference to each list item, not the item
+            -- itself, so the missing-value sentinel has to be dereferenced
+            -- before it compares equal to anything.
+            set isLocal to ((contents of acct) is missing value)
+            if isLocal then
+                set acctName to "${LOCAL_ACCOUNT_LABEL}"
+            else
+                set acctName to name of acct
+            end if
+
+            -- Two bulk reads per scope: each mailbox's own (leaf) name, and
+            -- each mailbox's parent name. Reading a name off an empty list is
+            -- an error, so an account with no mailboxes falls through the try.
+            set leafNames to {}
+            set parentNames to {}
+            try
+                if isLocal then
+                    set leafNames to name of (every mailbox)
+                    set parentNames to name of (container of (every mailbox))
+                else
+                    set leafNames to name of (every mailbox of acct)
+                    set parentNames to name of (container of (every mailbox of acct))
+                end if
+            end try
+
+            set roots to {}
+            set parentSet to {}
+            repeat with i from 1 to (count of leafNames)
+                set pn to item i of parentNames
+                if pn is missing value then
+                    set end of roots to (item i of leafNames)
+                else if parentSet does not contain pn then
+                    set end of parentSet to pn
+                end if
+            end repeat
+
+            -- Breadth-first by path. Only a mailbox whose leaf name appears as
+            -- somebody's parent is asked for children; a name that collides
+            -- with a real parent's costs one empty query, never a wrong answer.
+            set queue to roots
+            set qi to 1
+            repeat while qi is less than or equal to (count of queue)
+                set p to item qi of queue
+                set qi to qi + 1
+                set end of out to (acctName & FS & p)
+
+                set AppleScript's text item delimiters to "/"
+                set leaf to last text item of p
+                set AppleScript's text item delimiters to ""
+
+                if parentSet contains leaf then
+                    try
+                        if isLocal then
+                            set kidNames to name of (every mailbox of (mailbox p))
+                        else
+                            set kidNames to name of (every mailbox of (mailbox p of acct))
+                        end if
+                        repeat with k in kidNames
+                            set end of queue to (p & "/" & (k as string))
+                        end repeat
+                    end try
+                end if
+            end repeat
+        end try
+    end repeat
+
+    set AppleScript's text item delimiters to RS
+    set resultText to out as string
+    set AppleScript's text item delimiters to ""
+    return resultText
 end tell`;
 
 		const result = (await runAppleScript(script)) as string;
-		return parseDelimitedList(result);
+
+		return parseDelimitedList(result).map((record) => {
+			const [account, path] = record.split(FIELD_SEPARATOR);
+			return formatMailboxSpec({ account: account || "Unknown", path: path || "" });
+		});
 	} catch (error) {
 		console.error(
 			`Error getting mailboxes: ${error instanceof Error ? error.message : String(error)}`,
@@ -711,9 +947,18 @@ end tell`;
 	}
 }
 
-/**
- * Get list of email accounts (simplified for performance)
- */
+async function getMailboxes(): Promise<string[]> {
+	return listMailboxes();
+}
+
+async function getMailboxesForAccount(accountName: string): Promise<string[]> {
+	if (!accountName || !accountName.trim()) {
+		return [];
+	}
+
+	return listMailboxes(accountName);
+}
+
 async function getAccounts(): Promise<string[]> {
 	try {
 		const accessResult = await requestMailAccess();
@@ -745,65 +990,6 @@ end tell`;
 	}
 }
 
-/**
- * Get mailboxes for a specific account
- */
-async function getMailboxesForAccount(accountName: string): Promise<string[]> {
-	try {
-		const accessResult = await requestMailAccess();
-		if (!accessResult.hasAccess) {
-			throw new Error(accessResult.message);
-		}
-
-		if (!accountName || !accountName.trim()) {
-			return [];
-		}
-
-		const escapedAccountName = escapeAppleScript(accountName);
-
-		const script = `
-tell application "Mail"
-    set RS to (character id 30)
-    set boxList to {}
-
-    try
-        -- Find the account
-        set targetAccount to first account whose name is "${escapedAccountName}"
-        set accountMailboxes to mailboxes of targetAccount
-
-        repeat with i from 1 to (count of accountMailboxes)
-            try
-                set currentMailbox to item i of accountMailboxes
-                set mailboxName to name of currentMailbox
-                set end of boxList to mailboxName
-            on error
-                -- Skip problematic mailboxes
-            end try
-        end repeat
-    on error
-        -- Account not found or other error
-        return ""
-    end try
-
-    set AppleScript's text item delimiters to RS
-    set resultText to boxList as string
-    set AppleScript's text item delimiters to ""
-    return resultText
-end tell`;
-
-		const result = (await runAppleScript(script)) as string;
-		return parseDelimitedList(result);
-	} catch (error) {
-		console.error(
-			`Error getting mailboxes for account: ${error instanceof Error ? error.message : String(error)}`,
-		);
-		return [];
-	}
-}
-
-/**
- * Get latest emails from a specific account
- */
 async function getLatestMails(
 	account: string,
 	limit = 5,

@@ -86,7 +86,7 @@ const CONTACTS_TOOL: Tool = {
       properties: {
         operation: {
           type: "string",
-          description: "Operation to perform: 'unread', 'search', 'send', 'mailboxes', 'accounts', or 'latest'",
+          description: "Operation to perform: 'unread', 'search', 'send', 'mailboxes' (every mailbox across all accounts, nested folders included, as 'Account / Path/To/Folder'), 'accounts', or 'latest'",
           enum: ["unread", "search", "send", "mailboxes", "accounts", "latest"]
         },
         account: {
@@ -95,7 +95,7 @@ const CONTACTS_TOOL: Tool = {
         },
         mailbox: {
           type: "string",
-          description: "Mailbox to search (optional). Search covers each account's inbox by default, for speed; name a mailbox such as 'Archive' or 'All Mail' to search that instead. Archived mail is not reachable without this."
+          description: "Mailbox to search (optional). Search covers each account's inbox by default, for speed; name a mailbox to search that instead. Archived mail is not reachable without this. Accepts any name the 'mailboxes' operation returns ('Account / Inbox/Sub/Folder'), an account-qualified path, a bare path ('Inbox/Sub/Folder'), or a bare folder name ('Archive')."
         },
         limit: {
           type: "number",

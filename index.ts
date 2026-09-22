@@ -844,7 +844,7 @@ end tell`;
 												type: "text",
 												text:
 													mailboxes.length > 0
-														? `Found ${mailboxes.length} mailboxes for account "${args.account}":\n\n${mailboxes.join("\n")}`
+														? `Found ${mailboxes.length} mailboxes for account "${args.account}". Any of these names can be passed back as "mailbox" on a search:\n\n${mailboxes.join("\n")}`
 														: `No mailboxes found for account "${args.account}". Make sure the account name is correct.`,
 											},
 										],
@@ -858,7 +858,7 @@ end tell`;
 												type: "text",
 												text:
 													mailboxes.length > 0
-														? `Found ${mailboxes.length} mailboxes:\n\n${mailboxes.join("\n")}`
+														? `Found ${mailboxes.length} mailboxes. Any of these names can be passed back as "mailbox" on a search:\n\n${mailboxes.join("\n")}`
 														: "No mailboxes found. Make sure Mail app is running and properly configured.",
 											},
 										],

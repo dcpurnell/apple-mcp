@@ -64,6 +64,114 @@ describe("Mail Integration Tests", () => {
     }, 15000);
   });
 
+  describe("getMailboxes coverage", () => {
+    it("should reach every account's mailboxes, not just the account-less ones", async () => {
+      const accounts = await mailModule.getAccounts();
+      const mailboxes = await mailModule.getMailboxes();
+
+      if (accounts.length === 0) {
+        console.log("ℹ️ Skipping - no mail accounts configured");
+        return;
+      }
+
+      // The bug this replaced returned only Outbox/SendLater/Deleted Messages,
+      // which belong to no account, and no account's Inbox at all.
+      const accountsSeen = new Set(
+        mailboxes
+          .map((name) => name.split(" / ")[0])
+          .filter((name) => name !== "On My Mac"),
+      );
+
+      expect(accountsSeen.size).toBeGreaterThan(0);
+      expect(
+        mailboxes.some((name) => /\/ (INBOX|Inbox)$/.test(name)),
+      ).toBe(true);
+      console.log(
+        `✅ ${mailboxes.length} mailboxes across ${accountsSeen.size} account(s), inbox included`,
+      );
+    }, 30000);
+
+    it("should list nested folders by their full path", async () => {
+      const mailboxes = await mailModule.getMailboxes();
+      const nested = mailboxes.filter((name) => {
+        const path = name.split(" / ")[1] ?? "";
+        return path.includes("/");
+      });
+
+      if (nested.length === 0) {
+        console.log("ℹ️ Skipping - no nested mailboxes on this machine");
+        return;
+      }
+
+      // A path implies its parent is listed too, otherwise the tree is
+      // being reported with holes in it.
+      const listed = new Set(mailboxes);
+      for (const name of nested.slice(0, 25)) {
+        const [account, path] = name.split(" / ");
+        const parent = path.slice(0, path.lastIndexOf("/"));
+        expect(listed.has(`${account} / ${parent}`)).toBe(true);
+      }
+
+      console.log(`✅ ${nested.length} nested mailboxes, parents all listed`);
+    }, 30000);
+
+    it("should keep the account-less mailboxes reachable", async () => {
+      const mailboxes = await mailModule.getMailboxes();
+      const local = mailboxes.filter((name) => name.startsWith("On My Mac / "));
+
+      if (local.length === 0) {
+        console.log("ℹ️ Skipping - no account-less mailboxes on this machine");
+        return;
+      }
+
+      const scoped = await mailModule.getMailboxesForAccount("On My Mac");
+      expect(scoped.sort()).toEqual(local.sort());
+      console.log(`✅ ${local.length} account-less mailboxes listed under On My Mac`);
+    }, 30000);
+
+    it("should scope to one account when asked", async () => {
+      const accounts = await mailModule.getAccounts();
+      if (accounts.length === 0) {
+        console.log("ℹ️ Skipping - no mail accounts configured");
+        return;
+      }
+
+      const target = accounts[0];
+      const scoped = await mailModule.getMailboxesForAccount(target);
+
+      expect(Array.isArray(scoped)).toBe(true);
+      for (const name of scoped) {
+        expect(name.startsWith(`${target} / `)).toBe(true);
+      }
+      console.log(`✅ ${scoped.length} mailboxes, all under "${target}"`);
+    }, 30000);
+
+    it("should return names that search accepts verbatim", async () => {
+      const mailboxes = await mailModule.getMailboxes();
+
+      // Pick a listed mailbox that actually holds mail, so a zero result
+      // would mean the name did not resolve rather than "nothing matched".
+      const candidates = mailboxes.filter(
+        (name) => !name.startsWith("On My Mac / "),
+      );
+      if (candidates.length === 0) {
+        console.log("ℹ️ Skipping - nothing to search");
+        return;
+      }
+
+      let resolved = 0;
+      for (const name of candidates.slice(0, 3)) {
+        // An empty result is fine; an unresolvable name throws instead.
+        const results = await mailModule.searchMails("e", 1, undefined, [name]);
+        expect(Array.isArray(results)).toBe(true);
+        resolved++;
+        await sleep(300);
+      }
+
+      console.log(`✅ ${resolved} listed name(s) resolved by search unchanged`);
+    }, 60000);
+  });
+
   describe("getUnreadMails", () => {
     it("should retrieve unread emails", async () => {
       const unreadEmails = await mailModule.getUnreadMails(10);

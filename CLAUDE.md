@@ -136,7 +136,29 @@ reason as Calendar:
   once per label and consumes the caller's limit.
 - **Never use top-level `mailboxes`**: it returns only mailboxes that belong to
   no account (Outbox, Deleted Messages, ...), never an account's Inbox. Iterate
-  `every mailbox of account` instead.
+  `every mailbox of account` instead. The `mailboxes` operation did exactly
+  this and reported 3 mailboxes on a machine with 656.
+- **`every mailbox of account` is flat, and leaf names repeat**: it already
+  contains nested mailboxes, but each reports only its leaf `name` - this Mac
+  has two "Projects" and three "Wellness" - so the list alone cannot say where
+  a mailbox sits. `name of (container of (every mailbox of acct))` is a second
+  bulk read giving every parent (`missing value` for a top-level one); the two
+  together identify roots and branches, and the tree is then walked by path.
+  Children are requested only from mailboxes that are somebody's parent: one
+  Apple event per branch, ~0.6s for all 656, against ~14s for a per-mailbox
+  walk of a single account.
+- **Mail addresses a nested mailbox by path**: `mailbox "Inbox/Elon Groups/Raving Fan" of account "X"`
+  resolves; `first mailbox whose name is "Inbox/Elon Groups/Raving Fan"` does
+  not, because `name` is the leaf. Search resolves a mailbox by path first and
+  falls back to the leaf-name lookup, so "Archive" keeps working.
+- **`mailboxes` names round-trip into `mailbox`**: the listing emits
+  `Account / Path/To/Folder`, and search accepts that, an account-qualified
+  path, a bare path, or a bare leaf name. The account list is only consulted
+  to disambiguate the unseparated `Account/Path` form.
+- **A repeat loop binds a reference, not the item**: `repeat with x in list`
+  makes `x is missing value` false for a missing-value element. Dereference
+  with `contents of x` first - this silently dropped the account-less
+  mailboxes from the listing.
 - **Unread queries check `unread count` first**: it is a cheap property, and on
   a multi-account setup the vast majority of mailboxes hold nothing
   (680 mailboxes, 2 with unread here). ~30s to ~7s.

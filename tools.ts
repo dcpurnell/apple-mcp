@@ -216,11 +216,11 @@ const CALENDAR_TOOL: Tool = {
       },
       fromDate: {
         type: "string",
-        description: "Start date for search range in ISO format (optional, default is 7 days ago)"
+        description: "Start of the range in ISO format (optional). Events overlapping the range are returned, including ones that began earlier. Default: 7 days ago (30 for search), or 21 days (60 for search) before toDate if only toDate is given"
       },
       toDate: {
         type: "string",
-        description: "End date for search range in ISO format (optional, default is 14 days from now)"
+        description: "End of the range in ISO format (optional). Default: 14 days from now (30 for search), or 21 days (60 for search) after fromDate if only fromDate is given"
       },
       title: {
         type: "string",

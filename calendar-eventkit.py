@@ -79,70 +79,75 @@ def get_calendars(store, calendar_names=None):
         return [c for c in all_calendars if c.title() in calendar_names]
     return list(all_calendars)
 
-def get_events(store, calendar_names=None, days_back=7, days_forward=14, limit=100):
+def query_events(store, calendar_names, start_dt, end_dt):
     """
-    Query calendar events using native EventKit
-    
-    Args:
-        store: EKEventStore instance
-        calendar_names: List of calendar names to query (None = all calendars)
-        days_back: Number of days in the past to query
-        days_forward: Number of days in the future to query
-        limit: Maximum number of events to return
-    
-    Returns:
-        List of event dictionaries
+    Every event occurrence overlapping [start_dt, end_dt), sorted by start.
+
+    The bounds are absolute datetimes and go straight into the EventKit
+    predicate. They used to travel as day offsets from "now", which could only
+    describe a window containing now: a future fromDate clamped to the present
+    and toDate was rounded up by as much as a day.
+
+    Overlap is deliberate: an event that starts before start_dt but is still
+    running inside the window is included (an overnight or multi-day event
+    belongs on that day's agenda). It is checked explicitly rather than left to
+    the predicate's own semantics. Recurring events arrive expanded, one
+    occurrence each, sharing an eventIdentifier.
     """
-    # Get target calendars
     target_calendars = get_calendars(store, calendar_names)
-    
     if not target_calendars:
         return []
-    
-    # Date range
-    start_date = NSDate.dateWithTimeIntervalSinceNow_(-days_back * 24 * 60 * 60)
-    end_date = NSDate.dateWithTimeIntervalSinceNow_(days_forward * 24 * 60 * 60)
-    
-    # Create predicate (this is FAST even with thousands of events)
-    predicate = store.predicateForEventsWithStartDate_endDate_calendars_(
-        start_date, end_date, target_calendars
-    )
-    
-    # Fetch events
-    events = store.eventsMatchingPredicate_(predicate)
-    
-    # Convert to dictionaries
-    results = []
-    for event in events[:limit]:
-        results.append({
-            'title': event.title() or 'Untitled',
-            'startDate': event.startDate().description(),
-            'endDate': event.endDate().description(),
-            'calendar': event.calendar().title(),
-            'location': event.location() or '',
-            'notes': event.notes() or '',
-            'isAllDay': event.isAllDay(),
-            'eventIdentifier': event.eventIdentifier()
-        })
-    
-    return results
 
-def search_events(store, search_text, calendar_names=None, days_back=30, days_forward=30, limit=50):
-    """Search events by text in title, location, or notes"""
-    all_events = get_events(store, calendar_names, days_back, days_forward, limit * 2)
-    
-    search_lower = search_text.lower()
+    start_ts = start_dt.timestamp()
+    end_ts = end_dt.timestamp()
+    predicate = store.predicateForEventsWithStartDate_endDate_calendars_(
+        to_nsdate(start_dt), to_nsdate(end_dt), target_calendars
+    )
+
     matches = []
-    
-    for event in all_events:
-        if (search_lower in event['title'].lower() or
-            search_lower in event['location'].lower() or
-            search_lower in event['notes'].lower()):
+    for event in store.eventsMatchingPredicate_(predicate) or []:
+        event_start = event.startDate().timeIntervalSince1970()
+        event_end = event.endDate().timeIntervalSince1970()
+        # A zero-length event exactly at start_dt still counts as inside
+        if event_start < end_ts and (event_end > start_ts or event_start >= start_ts):
+            matches.append((event_start, event_end, event))
+
+    # eventsMatchingPredicate_ has no defined order; sort before any limit so
+    # the limit keeps the earliest events rather than an arbitrary subset.
+    matches.sort(key=lambda m: (m[0], m[1]))
+    return [m[2] for m in matches]
+
+
+def get_events(store, start_dt, end_dt, calendar_names=None, limit=100):
+    """Events overlapping the window, earliest first, plus the uncapped total."""
+    events = query_events(store, calendar_names, start_dt, end_dt)
+    return [serialize_event(e) for e in events[:limit]], len(events)
+
+
+def search_events(store, search_text, start_dt, end_dt, calendar_names=None, limit=50):
+    """Search the whole window by title, location, or notes; then apply the limit."""
+    needle = search_text.lower()
+    matches = []
+    for event in query_events(store, calendar_names, start_dt, end_dt):
+        haystack = ' '.join([
+            event.title() or '', event.location() or '', event.notes() or ''
+        ]).lower()
+        if needle in haystack:
             matches.append(event)
-            if len(matches) >= limit:
-                break
-    
-    return matches
+    return [serialize_event(e) for e in matches[:limit]], len(matches)
+
+
+def parse_window(argv, first):
+    """Read calendar names, from, to and limit from argv starting at first."""
+    if len(argv) < first + 3:
+        raise ValueError('Expected arguments: calendar_names from_iso to_iso [limit]')
+    calendar_names = argv[first].split(',') if argv[first] else None
+    start_dt = parse_iso(argv[first + 1], 'from date')
+    end_dt = parse_iso(argv[first + 2], 'to date')
+    if end_dt <= start_dt:
+        raise ValueError(f'to date {argv[first + 2]} is not after from date {argv[first + 1]}')
+    return calendar_names, start_dt, end_dt
+
 
 def parse_iso(value, field):
     """Parse an ISO-8601 string into a naive local datetime."""
@@ -266,8 +271,8 @@ def main():
             'error': 'Usage: python3 calendar-eventkit.py <command> [args...]',
             'commands': {
                 'list_calendars': 'List all available calendars',
-                'get_events': 'Get events (args: calendar_names days_back days_forward limit)',
-                'search_events': 'Search events (args: search_text calendar_names days_back days_forward limit)',
+                'get_events': 'Get events (args: calendar_names from_iso to_iso limit)',
+                'search_events': 'Search events (args: search_text calendar_names from_iso to_iso limit)',
                 'create_event': 'Create an event (args: json_payload)',
                 'get_event': 'Fetch one event by identifier (args: event_id)',
                 'delete_event': 'Delete an event by identifier (args: event_id)'
@@ -292,37 +297,35 @@ def main():
             print(json.dumps(result))
         
         elif command == 'get_events':
-            calendar_names = sys.argv[2].split(',') if len(sys.argv) > 2 and sys.argv[2] else None
-            days_back = int(sys.argv[3]) if len(sys.argv) > 3 else 7
-            days_forward = int(sys.argv[4]) if len(sys.argv) > 4 else 14
+            calendar_names, start_dt, end_dt = parse_window(sys.argv, 2)
             limit = int(sys.argv[5]) if len(sys.argv) > 5 else 100
-            
-            events = get_events(store, calendar_names, days_back, days_forward, limit)
+
+            events, total = get_events(store, start_dt, end_dt, calendar_names, limit)
             print(json.dumps({
                 'events': events,
                 'count': len(events),
+                'total': total,
                 'calendars': calendar_names or 'all',
-                'dateRange': f'{days_back} days back, {days_forward} days forward'
             }))
-        
+
         elif command == 'search_events':
-            if len(sys.argv) < 3:
-                print(json.dumps({'error': 'search_events requires search_text argument'}))
-                sys.exit(1)
-            
+            if len(sys.argv) < 3 or not sys.argv[2]:
+                raise ValueError('search_events requires search_text argument')
+
             search_text = sys.argv[2]
-            calendar_names = sys.argv[3].split(',') if len(sys.argv) > 3 and sys.argv[3] else None
-            days_back = int(sys.argv[4]) if len(sys.argv) > 4 else 30
-            days_forward = int(sys.argv[5]) if len(sys.argv) > 5 else 30
+            calendar_names, start_dt, end_dt = parse_window(sys.argv, 3)
             limit = int(sys.argv[6]) if len(sys.argv) > 6 else 50
-            
-            events = search_events(store, search_text, calendar_names, days_back, days_forward, limit)
+
+            events, total = search_events(
+                store, search_text, start_dt, end_dt, calendar_names, limit
+            )
             print(json.dumps({
                 'events': events,
                 'count': len(events),
+                'total': total,
                 'searchText': search_text
             }))
-        
+
         elif command == 'create_event':
             payload = json.loads(sys.argv[2] if len(sys.argv) > 2 else '{}')
             print(json.dumps({'event': create_event(store, payload)}))

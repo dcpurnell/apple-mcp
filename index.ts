@@ -8,6 +8,7 @@ import {
 import { runAppleScript } from "run-applescript";
 import { escapeAppleScript } from "./utils/applescript-escape";
 import tools from "./tools";
+import type { EventQuery } from "./utils/calendar-python";
 
 // Non-printable delimiters used to safely encode multi-field AppleScript
 // results as a single string (mirrors utils/mail.ts). Commas/braces break on
@@ -1203,38 +1204,66 @@ end tell`;
 							"Holidays"
 						];
 
-						// Helper to convert ISO date range to daysBack/daysForward
-						const convertDateRange = (fromDate?: string, toDate?: string) => {
-							const now = new Date();
-							let daysBack = 7;
-							let daysForward = 14;
-
-							if (fromDate) {
-								const from = new Date(fromDate);
-								const diffMs = now.getTime() - from.getTime();
-								daysBack = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+						// Header and per-event text for a window query. The header reports the
+						// span the returned events actually cover, with the requested window
+						// beside it: echoing only the request is what hid a window that had
+						// been dragged to "now". Overlapping events are included on purpose
+						// and marked, so they do not read as a leak.
+						const describeWindow = (
+							query: EventQuery,
+							lead: string,
+							calendarCount: number,
+							withNotes: boolean,
+						): string => {
+							const { events, total, range } = query;
+							const when = (d: Date) => d.toLocaleString();
+							const requested = `${when(range.from)} to ${when(range.to)}`;
+							if (events.length === 0) {
+								return `No ${lead} between ${requested} in ${calendarCount} calendars.`;
 							}
 
-							if (toDate) {
-								const to = new Date(toDate);
-								const diffMs = to.getTime() - now.getTime();
-								daysForward = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
-							}
+							const starts = events.map((e) => new Date(e.startDate).getTime());
+							const ends = events.map((e) => new Date(e.endDate).getTime());
+							const covered =
+								`${when(new Date(Math.min(...starts)))} to ` +
+								`${when(new Date(Math.max(...ends)))}`;
+							const shown =
+								total > events.length ? `${events.length} of ${total}` : `${events.length}`;
+							const truncated =
+								total > events.length ? "; earliest shown, raise limit for the rest" : "";
+							const header =
+								`Found ${shown} ${lead} spanning ${covered} ` +
+								`(requested ${requested}; ${calendarCount} calendars${truncated}):`;
 
-							return { daysBack, daysForward };
+							const body = events.map((event) => {
+								const start = new Date(event.startDate);
+								const end = new Date(event.endDate);
+								const marks = [
+									start < range.from ? "started before window" : "",
+									end > range.to ? "continues after window" : "",
+								].filter(Boolean);
+								return (
+									`${event.title} (${when(start)} - ${when(end)})` +
+									`${marks.length ? ` [${marks.join(", ")}]` : ""}\n` +
+									`Location: ${event.location || "Not specified"}\n` +
+									`Calendar: ${event.calendarName}\n` +
+									`ID: ${event.id}` +
+									(withNotes && event.notes ? `\nNotes: ${event.notes}` : "")
+								);
+							});
+							return `${header}\n\n${body.join("\n\n")}`;
 						};
 
 						switch (operation) {
 							case "search": {
 								const { searchText, calendarNames, limit, fromDate, toDate } = args;
-								const { daysBack, daysForward } = convertDateRange(fromDate, toDate);
+								const range = calendarModule.resolveDateRange(fromDate, toDate, 30, 30);
 								const calendars = (calendarNames && calendarNames.length > 0) ? calendarNames : DEFAULT_CALENDARS;
-								
-								const events = await calendarModule.searchEvents(
+
+								const query = await calendarModule.searchEventsInRange(
 									searchText!,
 									calendars,
-									daysBack,
-									daysForward,
+									range,
 									limit || 20
 								);
 
@@ -1242,19 +1271,12 @@ end tell`;
 									content: [
 										{
 											type: "text",
-											text:
-												events.length > 0
-													? `Found ${events.length} events matching "${searchText}" (searched ${calendars.length} calendars):\n\n${events
-															.map(
-																(event) =>
-																	`${event.title} (${new Date(event.startDate).toLocaleString()} - ${new Date(event.endDate).toLocaleString()})\n` +
-																	`Location: ${event.location || "Not specified"}\n` +
-																	`Calendar: ${event.calendarName}\n` +
-																	`ID: ${event.id}\n` +
-																	`${event.notes ? `Notes: ${event.notes}\n` : ""}`,
-															)
-															.join("\n\n")}`
-													: `No events found matching "${searchText}" in ${calendars.length} calendars.`,
+											text: describeWindow(
+												query,
+												`events matching "${searchText}"`,
+												calendars.length,
+												true,
+											),
 										},
 									],
 									isError: false,
@@ -1280,39 +1302,20 @@ end tell`;
 
 							case "list": {
 								const { calendarNames, limit, fromDate, toDate } = args;
-								const { daysBack, daysForward } = convertDateRange(fromDate, toDate);
+								const range = calendarModule.resolveDateRange(fromDate, toDate);
 								const calendars = (calendarNames && calendarNames.length > 0) ? calendarNames : DEFAULT_CALENDARS;
-								
-								const events = await calendarModule.getEvents(
+
+								const query = await calendarModule.getEventsInRange(
 									calendars,
-									daysBack,
-									daysForward,
+									range,
 									limit || 20
 								);
-
-								const startDateText = fromDate
-									? new Date(fromDate).toLocaleDateString()
-									: `${daysBack} days ago`;
-								const endDateText = toDate
-									? new Date(toDate).toLocaleDateString()
-									: `${daysForward} days from now`;
 
 								return {
 									content: [
 										{
 											type: "text",
-											text:
-												events.length > 0
-													? `Found ${events.length} events from ${startDateText} to ${endDateText} (${calendars.length} calendars):\n\n${events
-															.map(
-																(event) =>
-																	`${event.title} (${new Date(event.startDate).toLocaleString()} - ${new Date(event.endDate).toLocaleString()})\n` +
-																	`Location: ${event.location || "Not specified"}\n` +
-																	`Calendar: ${event.calendarName}\n` +
-																	`ID: ${event.id}`,
-															)
-															.join("\n\n")}`
-													: `No events found from ${startDateText} to ${endDateText} in ${calendars.length} calendars.`,
+											text: describeWindow(query, "events", calendars.length, false),
 										},
 									],
 									isError: false,

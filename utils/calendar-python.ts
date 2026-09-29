@@ -57,6 +57,7 @@ interface PythonEventKitResponse {
   calendars?: Array<{ name: string; type: number }>;
   deleted?: boolean;
   count?: number;
+  total?: number;
   error?: string;
   accessDenied?: boolean;
 }
@@ -151,35 +152,71 @@ export async function getCalendarList(): Promise<Array<{ name: string; type: str
   }));
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** An absolute query window: events overlapping [from, to) are returned. */
+interface DateRange {
+  from: Date;
+  to: Date;
+}
+
+/** Events from one window query, and how many matched before the limit. */
+interface EventQuery {
+  events: CalendarEvent[];
+  total: number;
+  range: DateRange;
+}
+
 /**
- * Get calendar events with date range and calendar filtering
+ * Resolve caller-supplied bounds into an absolute window.
+ *
+ * Both bounds given: used as-is. One bound given: the other is placed
+ * relative to it, never to "now", so a window in the future or past stays
+ * there. Neither given: daysBack/daysForward around now.
  */
-export async function getEvents(
-  calendarNames?: string[],
+function resolveDateRange(
+  fromDate?: string,
+  toDate?: string,
   daysBack: number = CONFIG.DEFAULT_DAYS_BACK,
-  daysForward: number = CONFIG.DEFAULT_DAYS_FORWARD,
-  limit: number = CONFIG.MAX_EVENTS
-): Promise<CalendarEvent[]> {
-  const calendarsArg = calendarNames ? calendarNames.join(",") : "";
-  const args = [
-    calendarsArg,
-    String(daysBack),
-    String(daysForward),
-    String(Math.min(limit, CONFIG.MAX_EVENTS))
-  ];
+  daysForward: number = CONFIG.DEFAULT_DAYS_FORWARD
+): DateRange {
+  const parse = (value: string, field: string): Date => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      throw new Error(`Invalid ${field} "${value}"; expected an ISO-8601 date`);
+    }
+    return date;
+  };
 
-  const result = await executePythonScript("get_events", args);
-  
-  if (result.error) {
-    throw new Error(result.error);
+  const span = (daysBack + daysForward) * DAY_MS;
+  let from: Date;
+  let to: Date;
+
+  if (fromDate && toDate) {
+    from = parse(fromDate, "fromDate");
+    to = parse(toDate, "toDate");
+  } else if (fromDate) {
+    from = parse(fromDate, "fromDate");
+    to = new Date(from.getTime() + span);
+  } else if (toDate) {
+    to = parse(toDate, "toDate");
+    from = new Date(to.getTime() - span);
+  } else {
+    const now = Date.now();
+    from = new Date(now - daysBack * DAY_MS);
+    to = new Date(now + daysForward * DAY_MS);
   }
 
-  if (!result.events) {
-    return [];
+  if (to.getTime() <= from.getTime()) {
+    throw new Error(
+      `toDate ${to.toLocaleString()} must be after fromDate ${from.toLocaleString()}`
+    );
   }
+  return { from, to };
+}
 
-  // Convert Python format to our CalendarEvent format
-  return result.events.map(event => ({
+function toCalendarEvents(result: PythonEventKitResponse): CalendarEvent[] {
+  return (result.events || []).map(event => ({
     id: event.eventIdentifier,
     title: event.title,
     location: event.location || null,
@@ -193,7 +230,75 @@ export async function getEvents(
 }
 
 /**
- * Search calendar events by text
+ * Events overlapping an absolute window, earliest first.
+ * An event that began before range.from but is still running is included.
+ */
+export async function getEventsInRange(
+  calendarNames: string[] | undefined,
+  range: DateRange,
+  limit: number = CONFIG.MAX_EVENTS
+): Promise<EventQuery> {
+  const result = await executePythonScript("get_events", [
+    calendarNames ? calendarNames.join(",") : "",
+    range.from.toISOString(),
+    range.to.toISOString(),
+    String(Math.min(limit, CONFIG.MAX_EVENTS))
+  ]);
+
+  if (result.error) {
+    throw new Error(result.error);
+  }
+
+  const events = toCalendarEvents(result);
+  return { events, total: result.total ?? events.length, range };
+}
+
+/**
+ * Search an absolute window by title, location, or notes, earliest first.
+ * The whole window is searched before the limit is applied.
+ */
+export async function searchEventsInRange(
+  searchText: string,
+  calendarNames: string[] | undefined,
+  range: DateRange,
+  limit: number = 50
+): Promise<EventQuery> {
+  const validation = validateSearchQuery(searchText);
+  if (!validation.isValid) {
+    throw new Error(validation.error);
+  }
+
+  const result = await executePythonScript("search_events", [
+    searchText,
+    calendarNames ? calendarNames.join(",") : "",
+    range.from.toISOString(),
+    range.to.toISOString(),
+    String(limit)
+  ]);
+
+  if (result.error) {
+    throw new Error(result.error);
+  }
+
+  const events = toCalendarEvents(result);
+  return { events, total: result.total ?? events.length, range };
+}
+
+/**
+ * Get calendar events in a window of days around now
+ */
+export async function getEvents(
+  calendarNames?: string[],
+  daysBack: number = CONFIG.DEFAULT_DAYS_BACK,
+  daysForward: number = CONFIG.DEFAULT_DAYS_FORWARD,
+  limit: number = CONFIG.MAX_EVENTS
+): Promise<CalendarEvent[]> {
+  const range = resolveDateRange(undefined, undefined, daysBack, daysForward);
+  return (await getEventsInRange(calendarNames, range, limit)).events;
+}
+
+/**
+ * Search calendar events by text in a window of days around now
  */
 export async function searchEvents(
   searchText: string,
@@ -202,43 +307,8 @@ export async function searchEvents(
   daysForward: number = 30,
   limit: number = 50
 ): Promise<CalendarEvent[]> {
-  // Validate search text
-  const validation = validateSearchQuery(searchText);
-  if (!validation.isValid) {
-    throw new Error(validation.error);
-  }
-
-  const calendarsArg = calendarNames ? calendarNames.join(",") : "";
-  const args = [
-    searchText,
-    calendarsArg,
-    String(daysBack),
-    String(daysForward),
-    String(limit)
-  ];
-
-  const result = await executePythonScript("search_events", args);
-  
-  if (result.error) {
-    throw new Error(result.error);
-  }
-
-  if (!result.events) {
-    return [];
-  }
-
-  // Convert Python format to our CalendarEvent format
-  return result.events.map(event => ({
-    id: event.eventIdentifier,
-    title: event.title,
-    location: event.location || null,
-    notes: event.notes || null,
-    startDate: event.startDate,
-    endDate: event.endDate,
-    calendarName: event.calendar,
-    isAllDay: event.isAllDay,
-    url: null
-  }));
+  const range = resolveDateRange(undefined, undefined, daysBack, daysForward);
+  return (await searchEventsInRange(searchText, calendarNames, range, limit)).events;
 }
 
 /**
@@ -361,4 +431,5 @@ export async function openEvent(eventId: string): Promise<{ success: boolean; me
   }
 }
 
-export type { CalendarEvent };
+export { resolveDateRange };
+export type { CalendarEvent, DateRange, EventQuery };

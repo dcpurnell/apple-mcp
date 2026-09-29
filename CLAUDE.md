@@ -54,6 +54,30 @@ The calendar module uses Python EventKit instead of AppleScript for performance:
 - `daysForward`: 14 days
 - Total: 21-day window (perfect for weekly reviews)
 
+**Date windows are absolute (MCP handler rules):**
+
+- **`fromDate`/`toDate` reach the EventKit predicate as dates**, via
+  `resolveDateRange` → `getEventsInRange`/`searchEventsInRange` → ISO argv.
+  They used to be converted to day offsets from now, which can only describe
+  a window containing now: a future `fromDate` clamped to the present and
+  `toDate` rounded up by as much as a day. A single-day query 3 days out
+  returned 5 days of events. Never reintroduce a now-relative hop.
+- **One bound given**: the other is placed relative to it (21 days; 60 for
+  search), never relative to now. `toDate <= fromDate` is an error.
+- **Overlap is deliberate**: an event is returned when
+  `start < toDate && end > fromDate`, so an overnight or multi-day event that
+  began earlier is on that day's agenda. The bridge checks this explicitly and
+  the text marks such events `[started before window]` /
+  `[continues after window]`.
+- **Sort before limit**: `eventsMatchingPredicate_` has no order, so results
+  are sorted by start before the limit is applied, and search filters the whole
+  window first. The header says `N of M` when the limit cut results off.
+- **The header reports the returned span**, with the requested window beside
+  it. Echoing only the request is what made the dragged window invisible.
+- Recurring events arrive expanded: one entry per occurrence, all sharing one
+  `eventIdentifier`. The "absolute date windows" tests cover all of the above
+  using windows ±16 days from today, so a now-anchored bound cannot pass.
+
 ### Contacts Implementation (Python Contacts Framework)
 
 The contacts module uses Python Contacts framework for fast queries and full contact details:

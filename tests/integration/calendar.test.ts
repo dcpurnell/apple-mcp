@@ -84,29 +84,140 @@ describe("Calendar Integration Tests", () => {
       console.log(`✅ ${events.length} events, all from "${target}"`);
     }, 20000);
 
-    it("should honor the date range window", async () => {
-      const daysBack = 3;
-      const daysForward = 3;
-      const events = await calendarModule.getEvents(
-        undefined,
-        daysBack,
-        daysForward,
-        100,
-      );
+  });
 
-      expect(Array.isArray(events)).toBe(true);
+  // Regression: fromDate/toDate used to be converted to day offsets from now,
+  // so a future window was dragged back to start at now and its end rounded up
+  // by as much as a day - wrong data that looked well-formed. These windows sit
+  // well away from today so a bound anchored to now cannot pass by accident.
+  describe("absolute date windows", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const createdIds: string[] = [];
 
-      // Allow a day of slack for all-day events and timezone edges
-      const lowerBound = Date.now() - (daysBack + 1) * 24 * 60 * 60 * 1000;
-      const upperBound = Date.now() + (daysForward + 1) * 24 * 60 * 60 * 1000;
+    // A single local day, `offset` days from today
+    const dayWindow = (offset: number) => {
+      const from = new Date();
+      from.setDate(from.getDate() + offset);
+      from.setHours(0, 0, 0, 0);
+      const to = new Date(from);
+      to.setHours(23, 59, 0, 0);
+      return { from, to };
+    };
 
+    const at = (base: Date, hours: number) => new Date(base.getTime() + hours * 60 * 60 * 1000);
+
+    const expectInside = (
+      events: { title: string; startDate: string; endDate: string }[],
+      range: { from: Date; to: Date },
+    ) => {
       for (const event of events) {
         const start = new Date(event.startDate).getTime();
-        expect(start).toBeGreaterThanOrEqual(lowerBound);
-        expect(start).toBeLessThanOrEqual(upperBound);
+        const end = new Date(event.endDate).getTime();
+        // Overlap semantics: starts before the window closes, ends after it opens
+        if (!(start < range.to.getTime() && end > range.from.getTime())) {
+          throw new Error(
+            `"${event.title}" (${event.startDate} - ${event.endDate}) is outside ` +
+              `${range.from.toISOString()} - ${range.to.toISOString()}`,
+          );
+        }
       }
-      console.log(`✅ All ${events.length} events fall inside the ±3 day window`);
+    };
+
+    afterAll(async () => {
+      for (const id of createdIds) {
+        try {
+          await calendarModule.deleteEvent(id);
+        } catch (error) {
+          console.warn(`Could not delete test event ${id}:`, error);
+        }
+      }
+    });
+
+    it("keeps a future single-day window inside both bounds", async () => {
+      const range = dayWindow(16);
+      const tag = `Range Test ${Date.now()}`;
+      const make = async (label: string, start: Date, end: Date) => {
+        const result = await calendarModule.createEvent("", `${tag} ${label}`, start, end);
+        expect(result.success).toBe(true);
+        createdIds.push(result.event!.id);
+      };
+
+      await make("inside", at(range.from, 10), at(range.from, 11));
+      await make("overlap", at(range.from, -2), at(range.from, 1)); // 10pm the night before
+      await make("before", at(range.from, -4), at(range.from, -3)); // ends before window
+      await make("after", at(range.from, 24.5), at(range.from, 25.5)); // 12:30am next day
+
+      const query = await calendarModule.getEventsInRange(undefined, range, 100);
+      expectInside(query.events, range);
+
+      const titles = query.events.map((e) => e.title);
+      expect(titles).toContain(`${tag} inside`);
+      expect(titles).toContain(`${tag} overlap`); // deliberate: overlapping events count
+      expect(titles).not.toContain(`${tag} before`);
+      expect(titles).not.toContain(`${tag} after`);
+
+      // Sorted before the limit: limit 1 must keep the earliest, the overlap event
+      const first = await calendarModule.getEventsInRange(undefined, range, 1);
+      expect(first.events.map((e) => e.title)).toEqual([`${tag} overlap`]);
+      expect(first.total).toBe(query.total);
+
+      // Search goes through the same window
+      const found = await calendarModule.searchEventsInRange(tag, undefined, range, 10);
+      expectInside(found.events, range);
+      expect(found.events.map((e) => e.title).sort()).toEqual(
+        [`${tag} inside`, `${tag} overlap`].sort(),
+      );
+      console.log(`✅ ${query.events.length} events, all inside ${range.from.toDateString()}`);
+    }, 60000);
+
+    it("keeps a past single-day window inside both bounds", async () => {
+      const range = dayWindow(-16);
+      const query = await calendarModule.getEventsInRange(undefined, range, 100);
+      expectInside(query.events, range);
+      console.log(`✅ ${query.events.length} events, all inside ${range.from.toDateString()}`);
     }, 20000);
+
+    it("expands recurring events once per occurrence", async () => {
+      // Monday to Saturday midnight, three weeks out
+      const from = new Date();
+      from.setDate(from.getDate() + 21 + ((8 - from.getDay()) % 7));
+      from.setHours(0, 0, 0, 0);
+      const range = { from, to: new Date(from.getTime() + 5 * DAY) };
+
+      const found = await calendarModule.searchEventsInRange(
+        "Daily Shutdown", undefined, range, 50,
+      );
+      const hits = found.events.filter((e) => e.title === "Daily Shutdown");
+      if (hits.length === 0) {
+        console.log("ℹ️ No recurring \"Daily Shutdown\" event on this Mac - skipping");
+        return;
+      }
+
+      expectInside(hits, range);
+      const days = hits.map((e) => new Date(e.startDate).toDateString());
+      expect(new Set(days).size).toBe(5);
+      expect(hits.length).toBe(5);
+      expect(new Set(hits.map((e) => e.id)).size).toBe(1);
+      console.log(`✅ Daily Shutdown on ${days.join(", ")}; one event id`);
+    }, 20000);
+
+    it("anchors a single bound to the other bound, not to now", () => {
+      const from = new Date(Date.now() + 40 * DAY);
+      const onlyFrom = calendarModule.resolveDateRange(from.toISOString());
+      expect(onlyFrom.from.getTime()).toBe(from.getTime());
+      expect(onlyFrom.to.getTime()).toBe(from.getTime() + 21 * DAY);
+
+      const onlyTo = calendarModule.resolveDateRange(undefined, from.toISOString());
+      expect(onlyTo.to.getTime()).toBe(from.getTime());
+      expect(onlyTo.from.getTime()).toBe(from.getTime() - 21 * DAY);
+    });
+
+    it("rejects an inverted or unparseable window", () => {
+      expect(() =>
+        calendarModule.resolveDateRange("2026-10-02T00:00:00", "2026-10-01T00:00:00"),
+      ).toThrow();
+      expect(() => calendarModule.resolveDateRange("not a date", undefined)).toThrow();
+    });
   });
 
   describe("searchEvents", () => {

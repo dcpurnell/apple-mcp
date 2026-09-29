@@ -125,7 +125,8 @@ reason as Calendar:
   A name resolves exact-case-insensitive first, then unique substring.
 - **`props` is accepted and ignored**: every property is always returned.
 - **`search` matches list titles too**, not only reminder names and notes -
-  otherwise searching "Top 3" returns nothing while the list holds four items.
+  otherwise searching a list's name (e.g. "Top 3") returns nothing even when
+  that list has reminders in it. An empty list still correctly returns nothing.
 - `list` reports per-list counts derived from `getAllReminders`, which caps at
   500; the text says so when the cap is hit rather than under-reporting silently.
 

@@ -2,7 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getContactsPython } from "./python-interpreter";
+import { bridgeCommand, getContactsPython } from "./python-interpreter";
 
 const execFileAsync = promisify(execFile);
 
@@ -51,6 +51,7 @@ interface PythonContactsResponse {
   count?: number;
   searchTerm?: string;
   error?: string;
+  accessDenied?: boolean;
 }
 
 /**
@@ -61,23 +62,33 @@ async function executePythonScript(
   args: string[] = []
 ): Promise<PythonContactsResponse> {
   try {
-    const { stdout, stderr } = await execFileAsync(
-      await getContactsPython(),
-      [PYTHON_SCRIPT, command, ...args],
-      { timeout: CONFIG.TIMEOUT_MS }
-    );
+    const bridge = bridgeCommand(await getContactsPython(), [
+      PYTHON_SCRIPT,
+      command,
+      ...args,
+    ]);
+    const { stdout, stderr } = await execFileAsync(bridge.file, bridge.args, {
+      timeout: CONFIG.TIMEOUT_MS,
+    });
 
     if (stderr && !stderr.includes("Warning")) {
       console.warn(`Python script stderr: ${stderr}`);
     }
 
     return JSON.parse(stdout);
-  } catch (error) {
-    if (error instanceof Error) {
-      console.error(`Python Contacts error: ${error.message}`);
-      return { error: error.message };
+  } catch (error: any) {
+    // The bridge exits non-zero on failure but still prints a JSON error body,
+    // so prefer that over execFile's generic "Command failed" message.
+    if (error && typeof error.stdout === "string" && error.stdout.trim()) {
+      try {
+        return JSON.parse(error.stdout);
+      } catch {
+        // fall through to the generic error below
+      }
     }
-    return { error: String(error) };
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Python Contacts error: ${message}`);
+    return { error: message };
   }
 }
 

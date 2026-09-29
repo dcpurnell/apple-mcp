@@ -3,7 +3,7 @@ import { promisify } from "util";
 import path from "path";
 import { fileURLToPath } from "url";
 import { validateText, VALIDATION_LIMITS } from "./input-validation";
-import { getEventKitPython } from "./python-interpreter";
+import { bridgeCommand, getEventKitPython } from "./python-interpreter";
 
 const execFileAsync = promisify(execFile);
 
@@ -62,11 +62,14 @@ async function executePythonScript(
 	args: string[] = [],
 ): Promise<PythonRemindersResponse> {
 	try {
-		const { stdout, stderr } = await execFileAsync(
-			await getEventKitPython(),
-			[PYTHON_SCRIPT, command, ...args],
-			{ timeout: CONFIG.TIMEOUT_MS },
-		);
+		const bridge = bridgeCommand(await getEventKitPython(), [
+			PYTHON_SCRIPT,
+			command,
+			...args,
+		]);
+		const { stdout, stderr } = await execFileAsync(bridge.file, bridge.args, {
+			timeout: CONFIG.TIMEOUT_MS,
+		});
 
 		if (stderr && !stderr.includes("Warning")) {
 			console.warn(`Python script stderr: ${stderr}`);

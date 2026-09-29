@@ -7,22 +7,55 @@ Requires: pip3 install pyobjc-framework-Contacts
 
 import sys
 import json
+import threading
 import Contacts
 from Foundation import NSPredicate
 
-def request_contacts_access(store):
-    """Check contacts access (synchronous)"""
+DENIED_MESSAGE = (
+    "Contacts access denied. Grant permission in "
+    "System Settings > Privacy & Security > Contacts"
+)
+
+
+class AccessDenied(Exception):
+    pass
+
+
+def ensure_access(store, timeout=30.0):
+    """
+    Ensure we hold Contacts access, prompting once if needed.
+
+    A NotDetermined status must actually request access. Querying without it
+    does not prompt: TCC denies silently and every fetch returns an empty
+    list, which reads as "no contacts" rather than as a failure.
+    """
     status = Contacts.CNContactStore.authorizationStatusForEntityType_(
         Contacts.CNEntityTypeContacts
     )
-    
+
     if status == Contacts.CNAuthorizationStatusAuthorized:
-        return True
-    elif status == Contacts.CNAuthorizationStatusDenied or status == Contacts.CNAuthorizationStatusRestricted:
-        return False
-    else:
-        # Not determined - request will happen on first query
-        return True
+        return
+    if status in (
+        Contacts.CNAuthorizationStatusDenied,
+        Contacts.CNAuthorizationStatusRestricted,
+    ):
+        raise AccessDenied(DENIED_MESSAGE)
+
+    granted = {}
+    done = threading.Event()
+
+    def completion(ok, err):
+        granted["ok"] = bool(ok)
+        done.set()
+
+    store.requestAccessForEntityType_completionHandler_(
+        Contacts.CNEntityTypeContacts, completion
+    )
+
+    if not done.wait(timeout):
+        raise AccessDenied("Timed out waiting for the Contacts permission prompt")
+    if not granted.get("ok"):
+        raise AccessDenied(DENIED_MESSAGE)
 
 def get_all_contacts(store, limit=1000):
     """
@@ -242,14 +275,9 @@ def main():
     # Initialize store
     store = Contacts.CNContactStore.alloc().init()
     
-    # Check access
-    if not request_contacts_access(store):
-        print(json.dumps({
-            'error': 'Contacts access denied. Grant permission in System Settings > Privacy & Security > Contacts'
-        }))
-        sys.exit(1)
-    
     try:
+        ensure_access(store)
+
         if command == 'list_all':
             limit = int(sys.argv[2]) if len(sys.argv) > 2 else 1000
             contacts = get_all_contacts(store, limit)
@@ -276,7 +304,10 @@ def main():
         else:
             print(json.dumps({'error': f'Unknown command: {command}'}))
             sys.exit(1)
-    
+
+    except AccessDenied as e:
+        print(json.dumps({'error': str(e), 'accessDenied': True}))
+        sys.exit(1)
     except Exception as e:
         print(json.dumps({'error': str(e)}))
         sys.exit(1)

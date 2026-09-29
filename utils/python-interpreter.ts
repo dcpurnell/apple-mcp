@@ -1,8 +1,21 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { readdirSync } from "fs";
+import { existsSync, readdirSync } from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const execFileAsync = promisify(execFile);
+
+// Launcher inside bridge/AppleMCPBridge.app (built by bridge/build.sh).
+const BRIDGE_LAUNCHER = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "bridge",
+  "AppleMCPBridge.app",
+  "Contents",
+  "MacOS",
+  "AppleMCPBridge"
+);
 
 // How long a probe may take. Importing a pyobjc framework is a cold-start
 // dylib load, so allow more than the trivial `-c "pass"` would need.
@@ -125,6 +138,39 @@ export function getPythonInterpreter(modules: string[]): Promise<string> {
   });
   resolutionCache.set(key, pending);
   return pending;
+}
+
+let warnedMissingLauncher = false;
+
+/**
+ * The command that runs a bridge script, routed through AppleMCPBridge.app.
+ *
+ * TCC attributes a request to the responsible process, which a child inherits.
+ * Under Claude desktop that is bun, a bare binary TCC will not prompt for full
+ * Calendar or Contacts access, so both are refused and nothing in System
+ * Settings can change it. The launcher makes the app bundle responsible
+ * instead, which can be prompted once and keeps the grant (bridge/launcher.c).
+ *
+ * Without the bundle the bridge runs directly, as before, and access then
+ * depends on whichever process happens to be responsible.
+ */
+export function bridgeCommand(
+  interpreter: string,
+  args: string[]
+): { file: string; args: string[] } {
+  if (existsSync(BRIDGE_LAUNCHER)) {
+    return { file: BRIDGE_LAUNCHER, args: [interpreter, ...args] };
+  }
+  if (!warnedMissingLauncher) {
+    warnedMissingLauncher = true;
+    // stderr: stdout is the MCP stdio channel.
+    console.error(
+      `AppleMCPBridge.app not found at ${BRIDGE_LAUNCHER}; running bridges ` +
+        `directly. Calendar and Contacts may be refused under a detached ` +
+        `launcher. Build it with: sh bridge/build.sh`
+    );
+  }
+  return { file: interpreter, args };
 }
 
 /** Interpreter for the EventKit bridges (Calendar, Reminders). */

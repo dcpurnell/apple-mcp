@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.dcpurnell.apple-mcp.bridge</string>
+	<key>CFBundleName</key>
+	<string>AppleMCPBridge</string>
+	<key>CFBundleDisplayName</key>
+	<string>Apple MCP Bridge</string>
+	<key>CFBundleExecutable</key>
+	<string>AppleMCPBridge</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>apple-mcp reads and creates calendar events for your MCP client.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>apple-mcp reads and creates calendar events for your MCP client.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>apple-mcp reads and creates reminders for your MCP client.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>apple-mcp reads and creates reminders for your MCP client.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>apple-mcp looks up contacts for your MCP client.</string>
+</dict>
+</plist>

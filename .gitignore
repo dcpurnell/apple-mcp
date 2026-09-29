@@ -192,3 +192,6 @@ dist
 # Finder (MacOS) folder config
 .DS_Store
 diagnose-icloud.sh
+
+# Built by bridge/build.sh; ad-hoc signed, so TCC grants are per machine
+bridge/AppleMCPBridge.app/

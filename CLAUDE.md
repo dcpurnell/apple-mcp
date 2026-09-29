@@ -238,6 +238,38 @@ which resolves via PATH:
 - A resolution failure propagates as a thrown error, matching the Reminders rule
   that a failure stays distinguishable from "nothing to do".
 
+### TCC identity: AppleMCPBridge.app (all three Python bridges)
+
+Build once with `sh bridge/build.sh`. `bridgeCommand()` in
+`utils/python-interpreter.ts` runs the Calendar, Reminders and Contacts bridges through
+`bridge/AppleMCPBridge.app/Contents/MacOS/AppleMCPBridge <python> <script> ...`.
+
+- **TCC grants follow the *responsible* process**, which a child inherits.
+  Claude desktop launches the server as `disclaimer --pgroup -- bun run index.ts`,
+  which makes bun responsible for every bridge. bun is a bare binary with no
+  Info.plist, so TCC refuses full Calendar and Contacts access by service
+  policy (`authValue=0, authReason=5`) and never prompts. Granting Claude.app
+  or bun in System Settings does not help.
+- **Terminal runs are a false positive**: there Terminal/VS Code is responsible
+  and already holds grants. Test under
+  `/Applications/Claude.app/Contents/Helpers/disclaimer --pgroup -- bun ...`.
+  `log show --predicate 'subsystem == "com.apple.TCC"'` shows `Resp:` and
+  the `AUTHREQ_RESULT` for each request.
+- **The launcher re-spawns itself disclaimed** (`responsibility_spawnattrs_setdisclaim`),
+  becoming its own responsible process, and runs python as its child. The
+  bundle's Info.plist carries the usage strings, so TCC prompts once and
+  remembers the grant for `com.dcpurnell.apple-mcp.bridge`. ~0.3s per call warm.
+- **Ad-hoc signed**: grants are pinned to the binary. `build.sh` leaves an
+  up-to-date bundle alone; `--force` rebuilds and the prompts appear again.
+- Without the bundle, bridges run directly and a one-time warning goes to stderr.
+- Reminders goes through it too. Without it, Reminders worked under Claude
+  desktop only because bun held a legacy (pre-macOS 14) grant, which a bun
+  upgrade (new binary, new signature) could silently invalidate.
+- **Contacts must request access explicitly.** Querying on NotDetermined does
+  not prompt; TCC denies silently and every fetch returns `[]` with exit 0.
+  The bridge now calls `requestAccessForEntityType_completionHandler_` and
+  reports `accessDenied`, like the Calendar bridge.
+
 ## Code Style
 
 ### TypeScript Configuration
